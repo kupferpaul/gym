@@ -4,6 +4,10 @@ import {
   sortExercises, suggestNext, sortSessions, prefill, stepWeight, formatWeight, formatDate, renumber,
 } from './logic.js';
 import { toJSON, fromJSON, toCSV } from './backup.js';
+import {
+  previousSets, compareSets, compareSet, ARROWS, feedbackText, suggestIncrease, ghostText,
+  remainingSeconds, formatClock,
+} from './progress.js';
 
 // ---------- Zustand (alles im Speicher, jede Änderung sofort nach IndexedDB) ----------
 const S = { gyms: [], exercises: [], sessions: [], sets: [], meta: new Map() };
@@ -13,6 +17,9 @@ let persisted = null;
 let exerciseDb = null;
 let lastSetAt = 0;
 let flashId = null;
+let timer = loadTimer(); // { endAt, duration, beeped } – zeitstempelbasiert, überlebt Neuladen
+let audioCtx = null;
+let wakeLock = null;
 
 const $ = (sel) => document.querySelector(sel);
 const app = $('#app');
@@ -26,6 +33,7 @@ const h = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
 const settings = () => ({ ...DEFAULT_SETTINGS, ...(S.meta.get('settings') || {}) });
 const gymById = (id) => S.gyms.find((g) => g.id === id);
 const exById = (id) => S.exercises.find((e) => e.id === id);
+const sortedGyms = () => S.gyms.slice().sort((a, b) => b.isHome - a.isHome || a.name.localeCompare(b.name));
 const homeGym = () => S.gyms.find((g) => g.isHome) || S.gyms[0];
 const currentGym = () => gymById(S.meta.get('lastGymId')) || homeGym();
 const setsOf = (sessionId) => S.sets.filter((s) => s.sessionId === sessionId);
@@ -44,6 +52,94 @@ function metaArray() {
 async function setMeta(key, value) {
   S.meta.set(key, value);
   await db.setMeta(key, value);
+}
+
+// ---------- Pausentimer, Ton, Wake Lock ----------
+function loadTimer() {
+  try { return JSON.parse(localStorage.getItem('timer')) || null; } catch (e) { return null; }
+}
+function saveTimer() {
+  try { localStorage.setItem('timer', JSON.stringify(timer)); } catch (e) { /* privat: egal */ }
+}
+
+function startTimer() {
+  const duration = settings().restSeconds;
+  timer = { endAt: Date.now() + duration * 1000, duration, beeped: false };
+  saveTimer();
+}
+
+function stopTimer() {
+  timer = null;
+  saveTimer();
+}
+
+// Nach 10 Min. ohne neuen Satz ist die Pause kein Thema mehr.
+const timerVisible = () => timer && Date.now() - timer.endAt < 10 * 60 * 1000;
+
+function timerHtml(big) {
+  if (!timerVisible()) return big ? `<span class="timer idle">⏱ ${formatClock(settings().restSeconds)}</span>` : '';
+  const sec = remainingSeconds(timer.endAt, Date.now());
+  const pct = sec ? (sec / timer.duration) * 100 : 0;
+  return `<button class="timer ${sec ? '' : 'done'} ${big ? '' : 'mini'}" data-a="timer-stop" id="timer${big ? '' : 'Mini'}">
+    <span class="bar" style="width:${pct}%"></span><span class="t">${sec ? '⏱ ' + formatClock(sec) : 'Los!'}</span></button>`;
+}
+
+function tick() {
+  if (!timer) return;
+  const sec = remainingSeconds(timer.endAt, Date.now());
+  document.querySelectorAll('.timer:not(.idle)').forEach((el) => {
+    el.querySelector('.t').textContent = sec ? '⏱ ' + formatClock(sec) : 'Los!';
+    el.querySelector('.bar').style.width = (sec ? (sec / timer.duration) * 100 : 0) + '%';
+    el.classList.toggle('done', !sec);
+  });
+  // Ton nur, wenn die App offen ist und das Ende gerade erst erreicht wurde.
+  if (!sec && !timer.beeped) {
+    timer.beeped = true;
+    saveTimer();
+    if (!document.hidden && Date.now() - timer.endAt < 3000) beep();
+  }
+  if (!timerVisible()) { stopTimer(); if (S.gyms.length) render(); }
+}
+setInterval(tick, 250);
+
+// iOS gibt Audio erst nach einer Berührung frei; "transient" duckt Musik/Podcasts kurz statt sie zu stoppen.
+function unlockAudio() {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = 'transient';
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch (e) { /* kein Ton möglich */ }
+}
+document.addEventListener('pointerdown', unlockAudio, { passive: true });
+
+function beep() {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  [0, 0.25, 0.5].forEach((dt) => {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, t0 + dt);
+    gain.gain.exponentialRampToValueAtTime(0.5, t0 + dt + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + 0.18);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t0 + dt);
+    osc.stop(t0 + dt + 0.2);
+  });
+}
+
+// Bildschirm anlassen, solange heute trainiert wird bzw. "Satz erfassen" offen ist.
+async function updateWakeLock() {
+  const want = settings().wakeLock && !document.hidden && (view.name === 'log' || !!todaySession());
+  try {
+    if (want && !wakeLock && navigator.wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } else if (!want && wakeLock) {
+      await wakeLock.release();
+      wakeLock = null;
+    }
+  } catch (e) { wakeLock = null; }
 }
 
 function toast(msg) {
@@ -80,6 +176,7 @@ function render() {
   document.querySelectorAll('#tabs button').forEach((b) =>
     b.classList.toggle('on', b.dataset.view === view.name));
   app.innerHTML = VIEWS[view.name]();
+  updateWakeLock();
   if (view.name === 'new') {
     const inp = $('#q');
     inp.value = view.q || '';
@@ -112,16 +209,19 @@ const VIEWS = {
     const suggest = suggestId && exById(suggestId);
 
     let out = `<header class="bar">
-      <h1>Training <span class="date">${h(formatDate(todayISO()))}</span></h1>
+      <h1>${h(formatDate(todayISO()))}</h1>
+      ${timerHtml(false)}
       <button class="chip" data-a="pick-gym">${h(gym.name)} ▾</button></header>`;
 
     if (doneIds.length) {
       out += '<h2>Heute</h2><div class="list">' + doneIds.map((id) => {
         const ex = exById(id);
         const list = todaySets.filter((s) => s.exerciseId === id);
+        const prev = previousSets(id, gym.id, S.sessions, S.sets, session.id);
+        const arrow = prev ? ARROWS[compareSets(prev.sets, list).result] + ' ' : '';
         return `<button class="row" data-a="open-ex" data-id="${id}"><div class="main">
           <div class="title">${h(ex ? ex.name : '?')}</div><div class="sub">${h(setSummary(list))}</div></div>
-          <span class="badge">✓ ${list.length}</span></button>`;
+          <span class="badge">${arrow}✓ ${list.length}</span></button>`;
       }).join('') + '</div>';
     }
 
@@ -142,19 +242,41 @@ const VIEWS = {
     const ex = exById(log.exerciseId);
     const session = todaySession();
     const list = session ? setsOf(session.id).filter((s) => s.exerciseId === ex.id).sort(byOrder) : [];
+    const prev = previousSets(ex.id, currentGym().id, S.sessions, S.sets, session && session.id);
+    const st = settings();
     const unit = log.unit;
     const keys = Array.from({ length: 20 }, (_, i) => `<button data-a="rep" data-n="${i + 1}">${i + 1}</button>`).join('');
     const segBtn = (u, label) => `<button data-a="unit" data-u="${u}" class="${unit === (u || null) ? 'on' : ''}">${label}</button>`;
+
+    // Geisterwert pro Satz: Reps desselben Satzes beim letzten Mal + Pfeil.
+    const ghost = (s) => {
+      const p = prev && prev.sets[s.order - 1];
+      return p ? `<span class="ghost r${compareSet(p, s)}">${ARROWS[compareSet(p, s)]} (${p.reps})</span>` : '';
+    };
+    let info = '';
+    if (prev && list.length >= prev.sets.length) {
+      const cmp = compareSets(prev.sets, list);
+      info = `<div class="feedback r${cmp.result}">${ARROWS[cmp.result]} ${h(feedbackText(cmp, prev.session.date))}</div>`;
+    } else if (!list.length && prev && suggestIncrease(prev.sets, log.weight, unit, st.increaseThreshold)) {
+      const step = unit === 'stufe' ? '+' + String(st.weightStepStufe).replace('.', ',') + ' Stufe'
+        : '+' + String(st.weightStepKg).replace('.', ',') + ' kg';
+      info = `<div class="banner"><span>Letztes Mal alle Sätze ≥ ${st.increaseThreshold} Reps. Gewicht erhöhen?</span>
+        <button class="primary" data-a="step" data-d="1">${step}</button></div>`;
+    }
+    const target = prev ? ghostText(prev.sets, list.length + 1) : null;
+    const targetText = target ? 'Ziel: ' + target : prev ? 'Extra-Satz' : 'Erstes Mal hier';
+
     return `<header class="bar">
         <button class="back ghost" data-a="home" aria-label="Zurück">‹</button>
-        <h1 data-a="edit-ex">${h(ex.name)}</h1>
-        <span class="date">${h(currentGym().name)}</span></header>
+        <div class="titles" data-a="edit-ex"><h1>${h(ex.name)}</h1><div class="date">${h(currentGym().name)}</div></div></header>
       <div class="list sets">${list.length ? list.map((s) => `
         <button class="row ${s.id === flashId ? 'flash' : ''}" data-a="edit-set" data-id="${s.id}">
           <span class="num">Satz ${s.order}</span><span class="main title">${h(formatWeight(s.weight, s.unit))}</span>
-          <span class="title">× ${s.reps}</span></button>`).join('')
-        : '<div class="empty">Noch kein Satz. Tippe die Reps unten.</div>'}</div>
+          <span class="title">× ${s.reps}</span>${ghost(s)}</button>`).join('')
+        : `<div class="empty">${prev ? 'Letztes Mal (' + h(formatDate(prev.session.date)) + '): ' + h(setSummary(prev.sets)) : 'Noch kein Satz. Tippe die Reps unten.'}</div>`}</div>
+      ${info}
       <div class="panel">
+        <div class="strip">${timerHtml(true)}<span class="target">${h(targetText)}</span></div>
         <div class="weight">
           <button data-a="step" data-d="-1" ${unit ? '' : 'disabled'}>−</button>
           <button class="val" data-a="type-weight" ${unit ? '' : 'disabled'}>${h(unit ? formatWeight(log.weight == null ? 0 : log.weight, unit) : 'ohne Gewicht')}</button>
@@ -193,7 +315,7 @@ const VIEWS = {
     const s = S.sessions.find((x) => x.id === view.id);
     if (!s) { view = { name: 'sessions' }; return VIEWS.sessions(); }
     const sets = setsOf(s.id);
-    const gymOpts = S.gyms.map((g) => `<option value="${g.id}" ${g.id === s.gymId ? 'selected' : ''}>${h(g.name)}</option>`).join('');
+    const gymOpts = sortedGyms().map((g) => `<option value="${g.id}" ${g.id === s.gymId ? 'selected' : ''}>${h(g.name)}</option>`).join('');
     return `<header class="bar"><button class="back ghost" data-a="tab" data-view="sessions" aria-label="Zurück">‹</button>
         <h1>${h(formatDate(s.date))}</h1></header>
       <div class="grid2">
@@ -220,7 +342,12 @@ const VIEWS = {
       <div class="settings">
       <h2>Gewichtsschritte kg</h2><div class="seg">${opt('weightStepKg', [1, 1.25, 2, 2.5, 5], (v) => String(v).replace('.', ','))}</div>
       <h2>Gewichtsschritte Stufe</h2><div class="seg">${opt('weightStepStufe', [0.5, 1, 2, 5], (v) => String(v).replace('.', ','))}</div>
-      <h2>Gyms</h2><div class="list">${S.gyms.map((g) => `
+      <h2>Pause</h2><div class="seg">${opt('restSeconds', [30, 45, 60, 90, 120, 180], formatClock)}</div>
+      <h2>„Gewicht erhöhen?“ ab Reps in allen Sätzen</h2><div class="seg">${opt('increaseThreshold', [8, 10, 11, 12, 13, 15], String)}</div>
+      <h2>Bildschirm während Training anlassen</h2><div class="seg">${opt('wakeLock', [true, false], (v) => (v ? 'An' : 'Aus'))}</div>
+      <div class="list" style="margin-top:8px"><button class="row" data-a="test-beep"><div class="main"><div class="title">Ton testen</div>
+        <div class="sub">So klingt das Pausenende (Lautstärke, Lautlos-Schalter)</div></div></button></div>
+      <h2>Gyms</h2><div class="list">${sortedGyms().map((g) => `
         <button class="row" data-a="edit-gym" data-id="${g.id}"><div class="main title">${h(g.name)}</div>
         ${g.isHome ? '<span class="badge">Home</span>' : ''}</button>`).join('')}
         <button class="row add" data-a="add-gym">+ Gym hinzufügen</button></div>
@@ -301,6 +428,7 @@ async function addSet(reps) {
   if (set.weight === null) set.unit = null;
   S.sets.push(set);
   await db.put('sets', set);
+  startTimer();
   flashId = set.id;
   render();
   const rows = document.querySelectorAll('.sets .row');
@@ -409,7 +537,7 @@ const A = {
 
   'pick-gym': () => {
     const cur = currentGym();
-    openSheet(`<h3>Gym wählen</h3><div class="list">${S.gyms.map((g) => `
+    openSheet(`<h3>Gym wählen</h3><div class="list">${sortedGyms().map((g) => `
       <button class="row ${g.id === cur.id ? 'suggest' : ''}" data-a="choose-gym" data-id="${g.id}">
       <div class="main title">${h(g.name)}</div>${g.isHome ? '<span class="badge">Home</span>' : ''}</button>`).join('')}
       <button class="row add" data-a="add-gym">+ Neues Gym</button></div>`);
@@ -553,6 +681,7 @@ const A = {
     const last = setsOf(session.id).filter((s) => s.exerciseId === log.exerciseId).sort(byOrder).pop();
     if (!last) return;
     await deleteSet(last.id);
+    stopTimer();
     flashId = null;
     render();
     toast('Satz ' + last.order + ' entfernt');
@@ -589,11 +718,40 @@ const A = {
     A.tab({ view: 'sessions' });
   },
 
-  'set-step': async (d) => { await setMeta('settings', { ...settings(), [d.k]: Number(d.v) }); render(); },
+  'set-step': async (d) => {
+    const v = d.v === 'true' ? true : d.v === 'false' ? false : Number(d.v);
+    await setMeta('settings', { ...settings(), [d.k]: v });
+    render();
+  },
+  'timer-stop': () => {
+    if (suppressClick) { suppressClick = false; return; }
+    stopTimer();
+    render();
+  },
+  'test-beep': () => { unlockAudio(); setTimeout(beep, 50); },
   'export-json': () => shareFile('gym-backup-' + todayISO() + '.json', toJSON(exportData()), 'application/json'),
   'export-csv': () => shareFile('gym-saetze-' + todayISO() + '.csv', toCSV(exportData()), 'text/csv'),
   'import-json': () => $('#importFile').click(),
 };
+
+// Langer Druck auf den Timer: +15 s.
+let pressTimer = null;
+let suppressClick = false;
+document.addEventListener('pointerdown', (e) => {
+  if (!e.target.closest('[data-a="timer-stop"]')) return;
+  pressTimer = setTimeout(() => {
+    if (!timer) return;
+    timer.endAt = Math.max(timer.endAt, Date.now()) + 15000;
+    timer.duration = Math.max(timer.duration, Math.ceil((timer.endAt - Date.now()) / 1000));
+    timer.beeped = false;
+    saveTimer();
+    suppressClick = true;
+    tick();
+    toast('+15 s');
+  }, 500);
+});
+['pointerup', 'pointercancel', 'pointerleave'].forEach((t) =>
+  document.addEventListener(t, () => clearTimeout(pressTimer)));
 
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-a]');
@@ -615,6 +773,11 @@ app.addEventListener('change', async (e) => {
 });
 
 // Datum kann über Mitternacht wechseln, wenn die App im Hintergrund war.
-document.addEventListener('visibilitychange', () => { if (!document.hidden && view.name === 'home') render(); });
+// Wake Lock fällt beim App-Wechsel weg und wird beim Zurückkommen neu angefordert.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if (view.name === 'home') render(); else updateWakeLock();
+  tick();
+});
 
 init().catch((err) => { app.innerHTML = '<div class="empty">Speicher nicht verfügbar: ' + h(err.message) + '</div>'; });

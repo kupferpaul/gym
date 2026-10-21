@@ -22,7 +22,9 @@ export const MUSCLES = {
 
 export const UNITS = ['kg', 'stufe', null];
 
-export const DEFAULT_SETTINGS = { weightStepKg: 2.5, weightStepStufe: 1 };
+export const DEFAULT_SETTINGS = {
+  weightStepKg: 2.5, weightStepStufe: 1, restSeconds: 60, increaseThreshold: 12, wakeLock: true,
+};
 
 export function muscleLabel(key) {
   return MUSCLES[key] || key || '–';

@@ -1,8 +1,8 @@
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 const CACHE = 'gym-v' + CACHE_VERSION;
 const FILES = [
   './', 'index.html', 'style.css', 'manifest.json',
-  'js/app.js', 'js/db.js', 'js/logic.js', 'js/backup.js',
+  'js/app.js', 'js/db.js', 'js/logic.js', 'js/backup.js', 'js/progress.js',
   'data/exercises.json',
   'icons/apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
