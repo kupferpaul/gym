@@ -3,7 +3,7 @@ import assert from 'assert';
 import { readFileSync } from 'fs';
 import { parseNotes, buildBackup } from '../tools/notes.mjs';
 import {
-  sortExercises, suggestNext, exerciseSequence, lastSet, prefill, stepWeight,
+  sortExercises, suggestNext, exerciseSequence, lastSet, prefill, stepWeight, historyStep, resolveStep,
   unitForEquipment, formatWeight, formatDate, renumber, todayISO,
 } from '../js/logic.js';
 import { toJSON, fromJSON, toCSV, CSV_HEADER } from '../js/backup.js';
@@ -89,18 +89,46 @@ test('Vorausfüllen: neues Gym → Standardeinheit, kein Gewicht', () => {
   assert.deepStrictEqual(prefill(exercises[1], 'fit', sessions, sets), { unit: 'kg', weight: null });
 });
 
+test('Vorausfüllen: letztes Mal ohne Gewicht → letztes notiertes Gewicht', () => {
+  const st = [...sets, set('s2', 'row', 2, null, null, 12)];
+  assert.deepStrictEqual(prefill(exercises[1], 'home', sessions, st), { unit: 'kg', weight: 52.5 });
+  const st2 = sets.filter((s) => !(s.sessionId === 's2' && s.exerciseId === 'row')).concat(set('s2', 'row', 1, null, null, 12));
+  assert.deepStrictEqual(prefill(exercises[1], 'home', sessions, st2), { unit: 'kg', weight: 50 });
+});
+
 test('Vorausfüllen: Übung ohne Gewicht bleibt ohne', () => {
   assert.deepStrictEqual(prefill(exercises[2], 'fit', sessions, sets), { unit: 'kg', weight: null });
   assert.deepStrictEqual(prefill(exercises[2], 'fit', sessions, sets, null), { unit: null, weight: null });
 });
 
-test('Gewichtsschritte je Einheit, nie unter 0, ohne Rundungsfehler', () => {
-  assert.strictEqual(stepWeight(130, 'kg', 1), 132.5);
-  assert.strictEqual(stepWeight(8, 'stufe', -1), 7);
-  assert.strictEqual(stepWeight(1, 'kg', -1), 0);
-  assert.strictEqual(stepWeight(null, 'kg', 1), 2.5);
-  assert.strictEqual(stepWeight(0.1, 'kg', 1, { weightStepKg: 0.2, weightStepStufe: 1 }), 0.3);
-  assert.strictEqual(stepWeight(5, null, 1), null);
+test('Gewichtsschritte: nie unter 0, ohne Rundungsfehler', () => {
+  assert.strictEqual(stepWeight(130, 'kg', 1, 2.5), 132.5);
+  assert.strictEqual(stepWeight(8, 'stufe', -1, 1), 7);
+  assert.strictEqual(stepWeight(1, 'kg', -1, 2.5), 0);
+  assert.strictEqual(stepWeight(null, 'kg', 1, 2.5), 2.5);
+  assert.strictEqual(stepWeight(0.1, 'kg', 1, 0.2), 0.3);
+  assert.strictEqual(stepWeight(5, null, 1, 1), null);
+});
+
+test('Schrittweite aus Verlauf: kleinster Abstand, pro Gym und Einheit', () => {
+  const st = [
+    set('s1', 'chest', 1, 110, 'stufe', 10), set('s1', 'chest', 2, 130, 'stufe', 8),
+    set('s2', 'chest', 1, 150, 'stufe', 8), set('s2', 'chest', 2, 130, 'stufe', 8),
+    set('s2', 'chest', 3, 60, 'kg', 8), set('s3', 'chest', 1, 7, 'stufe', 8),
+    set('s1', 'row', 1, 62.5, 'kg', 8), set('s2', 'row', 1, 75, 'kg', 8), set('s2', 'row', 2, null, null, 8),
+  ];
+  assert.strictEqual(historyStep('chest', 'home', 'stufe', sessions, st), 20);
+  assert.strictEqual(historyStep('chest', 'home', 'kg', sessions, st), null);
+  assert.strictEqual(historyStep('chest', 'fit', 'stufe', sessions, st), null);
+  assert.strictEqual(historyStep('row', 'home', 'kg', sessions, st), 12.5);
+  assert.strictEqual(historyStep('row', 'home', null, sessions, st), null);
+});
+
+test('Schrittweite: eigene Einstellung > Verlauf > Standard', () => {
+  assert.strictEqual(resolveStep(5, 20, 'stufe'), 5);
+  assert.strictEqual(resolveStep(null, 20, 'stufe'), 20);
+  assert.strictEqual(resolveStep(null, null, 'stufe'), 1);
+  assert.strictEqual(resolveStep(undefined, null, 'kg'), 2.5);
 });
 
 test('Einheit aus Equipment', () => {

@@ -2,6 +2,7 @@ import * as db from './db.js';
 import {
   MUSCLES, DEFAULT_SETTINGS, muscleLabel, unitForEquipment, todayISO, exerciseSequence,
   sortExercises, suggestNext, sortSessions, prefill, stepWeight, formatWeight, formatDate, renumber,
+  historyStep, resolveStep, stepSize,
 } from './logic.js';
 import { toJSON, fromJSON, toCSV } from './backup.js';
 import {
@@ -258,11 +259,10 @@ const VIEWS = {
       const cmp = compareSets(prev.sets, list);
       info = `<div class="feedback r${cmp.result}">${ARROWS[cmp.result]} ${h(feedbackText(cmp, prev.session.date))}</div>`;
     } else if (!list.length && prev && suggestIncrease(prev.sets, log.weight, unit, st.increaseThreshold)) {
-      const step = unit === 'stufe' ? '+' + String(st.weightStepStufe).replace('.', ',') + ' Stufe'
-        : '+' + String(st.weightStepKg).replace('.', ',') + ' kg';
       info = `<div class="banner"><span>Letztes Mal alle Sätze ≥ ${st.increaseThreshold} Reps. Gewicht erhöhen?</span>
-        <button class="primary" data-a="step" data-d="1">${step}</button></div>`;
+        <button class="primary" data-a="step" data-d="1">+${h(stepLabel(stepInfo().step, unit))}</button></div>`;
     }
+    const step = unit ? fmtNum(stepInfo().step) : '';
     const target = prev ? ghostText(prev.sets, list.length + 1) : null;
     const targetText = target ? 'Ziel: ' + target : prev ? 'Extra-Satz' : 'Erstes Mal hier';
 
@@ -278,9 +278,9 @@ const VIEWS = {
       <div class="panel">
         <div class="strip">${timerHtml(true)}<span class="target">${h(targetText)}</span></div>
         <div class="weight">
-          <button data-a="step" data-d="-1" ${unit ? '' : 'disabled'}>−</button>
-          <button class="val" data-a="type-weight" ${unit ? '' : 'disabled'}>${h(unit ? formatWeight(log.weight == null ? 0 : log.weight, unit) : 'ohne Gewicht')}</button>
-          <button data-a="step" data-d="1" ${unit ? '' : 'disabled'}>+</button>
+          <button data-a="step" data-d="-1" ${unit ? '' : 'disabled'}>−<small>${step}</small></button>
+          <button class="val" data-a="type-weight" ${unit ? '' : 'disabled'}>${h(!unit ? 'ohne Gewicht' : log.weight == null ? (unit === 'stufe' ? 'Stufe –' : '– kg') : formatWeight(log.weight, unit))}</button>
+          <button data-a="step" data-d="1" ${unit ? '' : 'disabled'}>+<small>${step}</small></button>
         </div>
         <div class="seg">${segBtn('kg', 'kg')}${segBtn('stufe', 'Stufe')}${segBtn('', 'ohne')}</div>
         <div class="reps">${keys}</div>
@@ -340,8 +340,10 @@ const VIEWS = {
         : 'Speicherstatus unbekannt.';
     return `<header class="bar"><h1>Einstellungen</h1></header>
       <div class="settings">
-      <h2>Gewichtsschritte kg</h2><div class="seg">${opt('weightStepKg', [1, 1.25, 2, 2.5, 5], (v) => String(v).replace('.', ','))}</div>
-      <h2>Gewichtsschritte Stufe</h2><div class="seg">${opt('weightStepStufe', [0.5, 1, 2, 5], (v) => String(v).replace('.', ','))}</div>
+      <p class="muted small">+/- nimmt pro Übung und Gym den kleinsten Abstand aus deinem Verlauf oder einen selbst gesetzten Schritt
+        (Tipp aufs Gewicht). Nur ohne beides gilt der Standard:</p>
+      <h2>Standard-Schritt kg</h2><div class="seg">${opt('weightStepKg', [1, 1.25, 2, 2.5, 5], fmtNum)}</div>
+      <h2>Standard-Schritt Stufe</h2><div class="seg">${opt('weightStepStufe', [0.5, 1, 2, 5], fmtNum)}</div>
       <h2>Pause</h2><div class="seg">${opt('restSeconds', [30, 45, 60, 90, 120, 180], formatClock)}</div>
       <h2>„Gewicht erhöhen?“ ab Reps in allen Sätzen</h2><div class="seg">${opt('increaseThreshold', [8, 10, 11, 12, 13, 15], String)}</div>
       <h2>Bildschirm während Training anlassen</h2><div class="seg">${opt('wakeLock', [true, false], (v) => (v ? 'An' : 'Aus'))}</div>
@@ -392,6 +394,20 @@ async function createExercise(ex) {
   S.exercises.push(full);
   await db.put('exercises', full);
   openExercise(full.id);
+}
+
+// ---------- Schrittweite +/- (pro Übung, Gym und Einheit) ----------
+const fmtNum = (n) => String(n).replace('.', ',');
+const stepKey = () => 'step:' + log.exerciseId + '|' + currentGym().id + '|' + log.unit;
+
+function stepInfo() {
+  const override = S.meta.get(stepKey()) || null;
+  const history = historyStep(log.exerciseId, currentGym().id, log.unit, S.sessions, S.sets);
+  return { override, history, step: resolveStep(override, history, log.unit, settings()) };
+}
+
+function stepLabel(step, unit) {
+  return unit === 'stufe' ? fmtNum(step) + ' Stufe' : fmtNum(step) + ' kg';
 }
 
 // ---------- Satz erfassen ----------
@@ -660,14 +676,24 @@ const A = {
     closeSheet();
     addSet(Math.round(n));
   },
-  step: (d) => { log.weight = stepWeight(log.weight, log.unit, Number(d.d), settings()); render(); },
+  step: (d) => { log.weight = stepWeight(log.weight, log.unit, Number(d.d), stepInfo().step); render(); },
   'type-weight': () => {
+    const info = stepInfo();
+    const auto = info.history ? 'aus Verlauf: ' + fmtNum(info.history) : 'Standard: ' + fmtNum(stepSize(log.unit, settings()));
     openSheet(`<h3>Gewicht (${log.unit === 'stufe' ? 'Stufe' : 'kg'})</h3>
-      <label class="field"><input id="fWeight" inputmode="decimal" value="${log.weight == null ? '' : String(log.weight).replace('.', ',')}"></label>
+      <label class="field"><input id="fWeight" inputmode="decimal" value="${log.weight == null ? '' : fmtNum(log.weight)}"></label>
+      <label class="field"><span>Schritt für +/- bei dieser Übung in diesem Gym (leer = automatisch, ${h(auto)})</span>
+        <input id="fStep" inputmode="decimal" value="${info.override ? fmtNum(info.override) : ''}" placeholder="${h(fmtNum(info.history || stepSize(log.unit, settings())))}"></label>
       <div class="btns"><button data-a="close">Abbrechen</button><button class="primary" data-a="save-weight">Übernehmen</button></div>`);
     setTimeout(() => $('#fWeight').select(), 50);
   },
-  'save-weight': () => { log.weight = parseNum($('#fWeight').value); closeSheet(); render(); },
+  'save-weight': async () => {
+    log.weight = parseNum($('#fWeight').value);
+    const step = parseNum($('#fStep').value);
+    await setMeta(stepKey(), step || null);
+    closeSheet();
+    render();
+  },
   unit: async (d) => {
     const unit = d.u || null;
     const gym = currentGym();

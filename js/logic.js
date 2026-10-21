@@ -135,19 +135,41 @@ export function lastSet(exerciseId, gymId, sessions, sets) {
 export function prefill(exercise, gymId, sessions, sets, unitPref) {
   const last = lastSet(exercise.id, gymId, sessions, sets);
   const unit = unitPref !== undefined ? unitPref : last && last.unit ? last.unit : exercise.defaultUnit;
-  // Gewicht nur übernehmen, wenn es in derselben Einheit war.
-  const weight = unit && last && last.weight != null && last.unit === unit ? last.weight : null;
-  return { unit: unit || null, weight };
+  if (!unit) return { unit: null, weight: null };
+  // Gewicht nur aus derselben Einheit; war beim letzten Mal keins notiert, das letzte notierte nehmen.
+  const weighted = lastSet(exercise.id, gymId, sessions, sets.filter((s) => s.weight != null && s.unit === unit));
+  return { unit, weight: weighted ? weighted.weight : null };
 }
 
 export function stepSize(unit, settings = DEFAULT_SETTINGS) {
   return unit === 'stufe' ? settings.weightStepStufe : settings.weightStepKg;
 }
 
-// +/- Schritt, nie unter 0, ohne Rundungsfehler (2,5 + 2,5 + 2,5 = 7,5).
-export function stepWeight(weight, unit, dir, settings = DEFAULT_SETTINGS) {
+// Schrittweite aus dem Verlauf: kleinster Abstand zwischen bisher genutzten Gewichten
+// dieser Übung in diesem Gym und dieser Einheit (z. B. 110/130 → 20, 9/10/11 → 1).
+export function historyStep(exerciseId, gymId, unit, sessions, sets) {
   if (!unit) return null;
-  const next = (weight || 0) + dir * stepSize(unit, settings);
+  const gymSessions = new Set(sessions.filter((s) => s.gymId === gymId).map((s) => s.id));
+  const weights = [...new Set(sets
+    .filter((s) => s.exerciseId === exerciseId && s.unit === unit && s.weight != null && gymSessions.has(s.sessionId))
+    .map((s) => s.weight))].sort((a, b) => a - b);
+  let best = null;
+  for (let i = 1; i < weights.length; i++) {
+    const d = Math.round((weights[i] - weights[i - 1]) * 100) / 100;
+    if (d > 0 && (best === null || d < best)) best = d;
+  }
+  return best;
+}
+
+// Reihenfolge: selbst eingestellt > aus Verlauf > Standard je Einheit.
+export function resolveStep(override, fromHistory, unit, settings = DEFAULT_SETTINGS) {
+  return override || fromHistory || stepSize(unit, settings);
+}
+
+// +/- Schritt, nie unter 0, ohne Rundungsfehler (2,5 + 2,5 + 2,5 = 7,5).
+export function stepWeight(weight, unit, dir, step) {
+  if (!unit) return null;
+  const next = (weight || 0) + dir * step;
   return Math.max(0, Math.round(next * 100) / 100);
 }
 
