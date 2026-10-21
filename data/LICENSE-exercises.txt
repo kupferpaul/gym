@@ -1,0 +1,4 @@
+data/exercises.json ist eine reduzierte Fassung von free-exercise-db
+https://github.com/yuhonas/free-exercise-db
+
+Lizenz: The Unlicense (Public Domain).
