@@ -141,6 +141,44 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: 
 .timer.idle { display: inline-flex; align-items: center; color: var(--muted); font-size: 17px; font-weight: 500; }
 .timer.mini { min-width: 0; font-size: 16px; min-height: 40px; }
 
+/* Diagramme: Kategorienfarben in fester Reihenfolge (geprüft: CVD/Kontrast hell + dunkel) */
+:root {
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  }
+}
+.chartbox { background: var(--card); border-radius: 12px; padding: 10px 6px 6px; }
+.chart { width: 100%; height: auto; display: block; overflow: visible; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .grid.zero { stroke: var(--muted); stroke-dasharray: 3 3; }
+.chart .axis { fill: var(--muted); font-size: 10px; }
+.chart .dlabel { fill: var(--text); font-size: 11px; }
+.chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .dot { fill: var(--c); stroke: var(--card); stroke-width: 2; }
+.chart .dot.est { fill: var(--card); stroke: var(--c); stroke-width: 2; }
+.chart .hit { fill: transparent; cursor: pointer; }
+.chart-info { min-height: 22px; font-size: 14px; color: var(--muted); padding: 6px 8px 2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.legend button {
+  min-height: 36px; padding: 0 12px; border-radius: 999px; font-size: 14px; background: var(--card);
+  display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line);
+}
+.legend button .sw { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+.legend button.off { opacity: 0.45; }
+.legend button.off .sw { background: transparent; border: 2px solid var(--c); width: 6px; height: 6px; }
+.spark { width: 64px; height: 24px; }
+.spark path { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.trend { min-width: 72px; text-align: right; font-size: 14px; white-space: nowrap; }
+.trend.r1 { color: var(--good); }
+.trend.r-1 { color: var(--danger); }
+.trend.none { color: var(--muted); }
+.cal { font-size: 14px; }
+
 /* Suche */
 .search {
   width: 100%; font: inherit; font-size: 18px; padding: 14px; border-radius: 12px;

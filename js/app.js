@@ -9,6 +9,10 @@ import {
   previousSets, compareSets, compareSet, ARROWS, feedbackText, suggestIncrease, ghostText,
   remainingSeconds, formatClock,
 } from './progress.js';
+import {
+  REGIONS, regionOf, exerciseSeries, regionSeries, recentTrend, suggestStartWeight, calibrationId,
+} from './stats.js';
+import { lineChart } from './chart.js';
 
 // ---------- Zustand (alles im Speicher, jede Änderung sofort nach IndexedDB) ----------
 const S = { gyms: [], exercises: [], sessions: [], sets: [], meta: new Map(), calibrations: [] };
@@ -262,6 +266,8 @@ const VIEWS = {
     } else if (!list.length && prev && suggestIncrease(prev.sets, log.weight, unit, st.increaseThreshold)) {
       info = `<div class="banner"><span>Letztes Mal alle Sätze ≥ ${st.increaseThreshold} Reps. Gewicht erhöhen?</span>
         <button class="primary" data-a="step" data-d="1">+${h(stepLabel(stepInfo().step, unit))}</button></div>`;
+    } else if (!list.length && log.fromFactor) {
+      info = '<div class="feedback">Erstes Mal hier: Startgewicht aus deiner Umrechnung vorgeschlagen.</div>';
     }
     const step = unit ? fmtNum(stepInfo().step) : '';
     const target = prev ? ghostText(prev.sets, list.length + 1) : null;
@@ -299,25 +305,113 @@ const VIEWS = {
       <div id="results" class="list"></div>`;
   },
 
+  // Verlauf: zusammengeführte Grafik, Übungen mit 4-Wochen-Trend, Link zu allen Trainings.
   sessions() {
-    const list = sortSessions(S.sessions).reverse();
     let out = '<header class="bar"><h1>Verlauf</h1></header>';
+    if (!S.sessions.length) return out + '<div class="empty">Noch keine Trainings.</div>';
+    const all = allSeries();
+    const segs = (a, cur, opts) => `<div class="seg">${opts.map(([v, l]) =>
+      `<button data-a="${a}" data-v="${v}" class="${cur === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    const lines = chartLines(all);
+    const visible = lines.filter((l) => !chartState.hidden.has(l.id));
+    out += segs('chart-mode', chartState.mode, [['regions', 'Körperregionen'], ['exercises', 'Übungen']]);
+    out += `<div class="chartbox" style="margin-top:8px">${lineChart(visible, { height: 220 })}
+      <div class="chart-info" id="chartInfo">Tippe auf einen Punkt für Details.</div></div>`;
+    out += `<div class="legend">${lines.map((l) => `<button data-a="chart-toggle" data-id="${h(l.id)}"
+      class="${chartState.hidden.has(l.id) ? 'off' : ''}" style="--c:var(--s${l.color})"><span class="sw"></span>${h(l.label)}</button>`).join('')}</div>`;
+    out += `<div style="margin-top:8px">${segs('chart-range', chartState.range, [['3', '3 Monate'], ['6', '6 Monate'], ['all', 'Alle']])}</div>`;
+    out += '<p class="muted small">0 % = erstes Training der Übung. Hohle Punkte sind geschätzt (anderes Gym oder Index-Stufe).</p>';
+
+    const today = todayISO();
+    out += '<h2>Übungen · letzte 4 Wochen (* geschätzt)</h2><div class="list">' + sortExercises(S.exercises, S.sets).map((ex) => {
+      const s = all.find((x) => x.exerciseId === ex.id);
+      const t = s && recentTrend(s, today);
+      const trend = t ? `<span class="trend r${t.result}">${ARROWS[t.result]} ${fmtPct(t.change)}${t.estimated ? '*' : ''}</span>`
+        : '<span class="trend none">zu wenig Daten</span>';
+      return `<button class="row" data-a="open-stats" data-id="${ex.id}"><div class="main"><div class="title">${h(ex.name)}</div>
+        <div class="sub">${h(regionOf(ex.muscleGroup) || muscleLabel(ex.muscleGroup))}${s && s.points.length ? ' · gesamt ' + fmtPct(s.points[s.points.length - 1].pct) : ''}</div></div>
+        ${sparkline(s)}${trend}</button>`;
+    }).join('') + '</div>';
+    out += `<div class="list" style="margin-top:16px"><button class="row" data-a="tab" data-view="trainings"><div class="main">
+      <div class="title">Alle Trainings</div><div class="sub">${S.sessions.length} Trainings, zum Ansehen und Bearbeiten</div></div>
+      <span class="muted">›</span></button></div>`;
+    return out;
+  },
+
+  // Kompakte Liste aller Trainings (wie die alte Notiz, nur kürzer).
+  trainings() {
+    const list = sortSessions(S.sessions).reverse();
+    let out = `<header class="bar"><button class="back ghost" data-a="tab" data-view="sessions" aria-label="Zurück">‹</button>
+      <h1>Alle Trainings</h1></header>`;
     if (!list.length) return out + '<div class="empty">Noch keine Trainings.</div>';
     return out + '<div class="list">' + list.map((s) => {
       const sets = setsOf(s.id);
       const g = gymById(s.gymId);
+      const lines = exerciseSequence(sets).map((id) => {
+        const ex = exById(id);
+        return `<div class="sub"><b>${h(ex ? ex.name : '?')}</b>  ${h(setSummary(sets.filter((x) => x.exerciseId === id)))}</div>`;
+      }).join('');
       return `<button class="row" data-a="open-session" data-id="${s.id}"><div class="main">
-        <div class="title">${h(formatDate(s.date))} · ${h(g ? g.name : '?')}</div>
-        <div class="sub">${exerciseSequence(sets).length} Übungen · ${sets.length} Sätze</div></div><span class="muted">›</span></button>`;
+        <div class="title">${h(formatDate(s.date))} · ${h(g ? g.name : '?')}</div>${lines}</div><span class="muted">›</span></button>`;
     }).join('') + '</div>';
+  },
+
+  // Übungsseite: %-Linie über alle Gyms, Gewicht und Gesamt-Reps pro Gerät, Umrechnung.
+  exstats() {
+    const ex = exById(view.id);
+    if (!ex) { view = { name: 'sessions' }; return VIEWS.sessions(); }
+    const s = allSeries().find((x) => x.exerciseId === ex.id);
+    const color = colorIndex().get(ex.id) || 1;
+    let out = `<header class="bar"><button class="back ghost" data-a="tab" data-view="sessions" aria-label="Zurück">‹</button>
+      <div class="titles"><h1>${h(ex.name)}</h1><div class="date">${h(muscleLabel(ex.muscleGroup))}</div></div></header>`;
+    if (!s.points.length) return out + '<div class="empty">Noch keine Trainings mit Gewicht.</div>';
+    const line = { id: ex.id, label: ex.name, color, points: s.points.map((p) => chartPoint(p, p.pct)) };
+    out += `<h2>Fortschritt über alle Gyms</h2><div class="chartbox">${lineChart([line], { height: 180 })}
+      <div class="chart-info" id="chartInfo">Tippe auf einen Punkt für Details.</div></div>`;
+
+    const [refGym, refUnit] = s.ref.split('|');
+    const unitName = (u) => (u === 'stufe' ? 'Stufe' : 'kg');
+    // Geräte mit Trainings, dazu Umrechnungen für Gyms ohne Trainings (nur fürs Startgewicht).
+    const machines = [...s.factors.keys()];
+    S.calibrations.filter((c) => c.exerciseId === ex.id).forEach((c) => {
+      const m = c.gymId + '|' + c.unit;
+      if (!machines.includes(m)) machines.push(m);
+    });
+    machines.forEach((machine) => {
+      const [gymId, unit] = machine.split('|');
+      const g = gymById(gymId);
+      const cal0 = S.calibrations.find((c) => c.id === calibrationId(ex.id, gymId, unit)) || {};
+      const f = s.factors.get(machine) || {
+        factor: cal0.factorToHome || (cal0.kgPerUnit && refUnit === 'kg' ? cal0.kgPerUnit : 0), source: 'manuell',
+      };
+      const pts = machineHistory(ex.id, gymId, unit);
+      const cal = S.calibrations.find((c) => c.id === calibrationId(ex.id, gymId, unit));
+      out += `<h2>${h(g ? g.name : '?')} · ${unitName(unit)}</h2>`;
+      if (pts.length >= 2) {
+        const mk = (key, label) => ({ id: machine + key, label, color, points: pts.map((p) => ({ t: tOf(p.date), y: p[key], info: formatDate(p.date) + ' · ' + label + ' ' + fmtNum(p[key]) })) });
+        const small = (key, label) => `<div class="chartbox" style="margin-bottom:6px"><div class="small muted" style="padding-left:8px">${label}</div>
+          ${lineChart([mk(key, label)], { height: 130, unit: '', zero: false, directLabels: false })}<div class="chart-info"></div></div>`;
+        out += small('weight', 'Gewicht') + small('reps', 'Gesamt-Reps');
+      } else {
+        out += `<p class="muted small">${pts.length} Training${pts.length === 1 ? '' : 's'} hier – Graph ab 2 Trainings.</p>`;
+      }
+      const calText = f.source === 'bezug'
+        ? 'Bezugsgerät' + (cal && cal.kgPerUnit ? ` · 1 Stufe = ${fmtNum(cal.kgPerUnit)} kg` : '')
+        : `1 ${unitName(unit)} hier ≈ ${fmtNum(Math.round(f.factor * 100) / 100)} ${unitName(refUnit)} in ${h((gymById(refGym) || {}).name || '?')}`
+          + (f.source === 'geschätzt' ? ` (geschätzt aus ${h(formatDate(f.anchorDate))})` : ' (von dir)');
+      out += `<div class="list"><button class="row" data-a="edit-cal" data-gym="${gymId}" data-unit="${unit}"><div class="main cal">${calText}</div>
+        <span class="muted">Ändern</span></button></div>`;
+    });
+    out += `<div class="list" style="margin-top:8px"><button class="row add" data-a="add-cal">+ Umrechnung für anderes Gym (Startgewicht)</button></div>`;
+    return out;
   },
 
   session() {
     const s = S.sessions.find((x) => x.id === view.id);
-    if (!s) { view = { name: 'sessions' }; return VIEWS.sessions(); }
+    if (!s) { view = { name: 'trainings' }; return VIEWS.trainings(); }
     const sets = setsOf(s.id);
     const gymOpts = sortedGyms().map((g) => `<option value="${g.id}" ${g.id === s.gymId ? 'selected' : ''}>${h(g.name)}</option>`).join('');
-    return `<header class="bar"><button class="back ghost" data-a="tab" data-view="sessions" aria-label="Zurück">‹</button>
+    return `<header class="bar"><button class="back ghost" data-a="tab" data-view="trainings" aria-label="Zurück">‹</button>
         <h1>${h(formatDate(s.date))}</h1></header>
       <div class="grid2">
         <label class="field"><span>Datum</span><input type="date" id="sessionDate" value="${s.date}"></label>
@@ -411,12 +505,107 @@ function stepLabel(step, unit) {
   return unit === 'stufe' ? fmtNum(step) + ' Stufe' : fmtNum(step) + ' kg';
 }
 
+// ---------- Verlauf / Statistik ----------
+const chartState = { mode: 'regions', range: 'all', hidden: new Set() };
+const tOf = (iso) => Date.parse(iso + 'T00:00:00Z');
+const fmtPct = (v) => (v > 0 ? '+' : v < 0 ? '−' : '±') + fmtNum(Math.abs(Math.round(v))) + ' %';
+
+function allSeries() {
+  return S.exercises.map((ex) => exerciseSeries(ex, homeGym().id, S.sessions, S.sets, S.calibrations));
+}
+
+// Farbe folgt der Übung (feste Reihenfolge nach Anlage), nie dem Rang; mehr als 8 → nicht im Gesamtbild.
+function colorIndex() {
+  const withData = new Set(S.sets.filter((s) => s.weight != null).map((s) => s.exerciseId));
+  const map = new Map();
+  S.exercises.filter((e) => withData.has(e.id)).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+    .slice(0, 8).forEach((e, i) => map.set(e.id, i + 1));
+  return map;
+}
+
+function chartPoint(p, y) {
+  const g = gymById(p.gymId);
+  return {
+    t: tOf(p.date), y, estimated: p.estimated,
+    info: formatDate(p.date) + ' · ' + (g ? g.name : '?') + ' · ' + formatWeight(p.weight, p.unit) + ' × ' + p.reps
+      + ' → ' + fmtPct(y) + (p.estimated ? ' (geschätzt)' : ''),
+  };
+}
+
+function chartLines(all) {
+  const from = chartState.range === 'all' ? 0 : tOf(todayISO()) - Number(chartState.range) * 30.5 * 864e5;
+  const inRange = (pts) => pts.filter((p) => p.t >= from);
+  if (chartState.mode === 'exercises') {
+    const colors = colorIndex();
+    return S.exercises.filter((e) => colors.has(e.id)).sort((a, b) => colors.get(a.id) - colors.get(b.id)).map((ex) => {
+      const s = all.find((x) => x.exerciseId === ex.id);
+      return { id: ex.id, label: ex.name, color: colors.get(ex.id), points: inRange(s.points.map((p) => chartPoint(p, p.pct))) };
+    }).filter((l) => l.points.length);
+  }
+  const regions = regionSeries(all, S.exercises);
+  return Object.keys(REGIONS).map((r, i) => regions[r] && {
+    id: r, label: r, color: i + 1,
+    points: inRange(regions[r].map((p) => ({
+      t: tOf(p.date), y: p.pct, estimated: p.estimated,
+      info: formatDate(p.date) + ' · ' + p.exercises.map((id) => (exById(id) || {}).name).join(', ')
+        + ' → ' + fmtPct(p.pct) + (p.estimated ? ' (geschätzt)' : ''),
+    }))),
+  }).filter((l) => l && l.points.length);
+}
+
+function sparkline(s) {
+  if (!s || s.points.length < 2) return '<svg class="spark"></svg>';
+  const pts = s.points.slice(-10);
+  const ys = pts.map((p) => p.pct);
+  const lo = Math.min(...ys);
+  const hi = Math.max(...ys);
+  const d = pts.map((p, i) => (i ? 'L' : 'M') + ((i / (pts.length - 1)) * 62 + 1).toFixed(1) + ' '
+    + (hi === lo ? 12 : 22 - ((p.pct - lo) / (hi - lo)) * 20).toFixed(1)).join(' ');
+  return `<svg class="spark" viewBox="0 0 64 24"><path d="${d}"/></svg>`;
+}
+
+// Pro Training an einem Gerät: höchstes Gewicht und Gesamt-Reps der Übung.
+function machineHistory(exerciseId, gymId, unit) {
+  return sortSessions(S.sessions.filter((s) => s.gymId === gymId)).map((session) => {
+    const list = setsOf(session.id).filter((x) => x.exerciseId === exerciseId);
+    const w = list.filter((x) => x.unit === unit && x.weight != null);
+    if (!w.length) return null;
+    return { date: session.date, weight: Math.max(...w.map((x) => x.weight)), reps: list.reduce((n, x) => n + x.reps, 0) };
+  }).filter(Boolean);
+}
+
+function calSheet(gymId, unit) {
+  const ex = exById(view.id);
+  const s = allSeries().find((x) => x.exerciseId === ex.id);
+  const [refGym, refUnit] = s.ref ? s.ref.split('|') : [homeGym().id, ex.defaultUnit || 'kg'];
+  const cal = S.calibrations.find((c) => c.id === calibrationId(ex.id, gymId, unit)) || {};
+  const isRef = s.ref === gymId + '|' + unit;
+  const unitName = (u) => (u === 'stufe' ? 'Stufe' : 'kg');
+  sheet.dataset.gym = gymId;
+  sheet.dataset.unit = unit;
+  openSheet(`<h3>Umrechnung · ${h((gymById(gymId) || {}).name)} (${unitName(unit)})</h3>
+    ${isRef ? '' : `<label class="field"><span>1 ${unitName(unit)} hier entspricht … ${unitName(refUnit)} in ${h((gymById(refGym) || {}).name)} (leer = automatisch schätzen)</span>
+      <input id="fFactor" inputmode="decimal" value="${cal.factorToHome ? fmtNum(cal.factorToHome) : ''}"></label>`}
+    ${unit === 'stufe' ? `<label class="field"><span>kg pro Stufe, falls bekannt (z. B. Plattengewicht)</span>
+      <input id="fKg" inputmode="decimal" value="${cal.kgPerUnit ? fmtNum(cal.kgPerUnit) : ''}"></label>` : ''}
+    ${!isRef || unit === 'stufe' ? '' : '<p class="muted">Das ist das Bezugsgerät, hier gibt es nichts umzurechnen.</p>'}
+    <div class="btns"><button data-a="close">Abbrechen</button><button class="primary" data-a="save-cal">Speichern</button></div>`);
+}
+
 // ---------- Satz erfassen ----------
 function openExercise(id) {
   const ex = exById(id);
   const gym = currentGym();
   const pref = S.meta.get('unitPref:' + id + '|' + gym.id);
   log = { exerciseId: id, ...prefill(ex, gym.id, S.sessions, S.sets, pref) };
+  // Neues Gym ohne Historie: Startgewicht aus der Umrechnung vorschlagen, falls eine eingetragen ist.
+  const cal = S.calibrations.find((c) => c.exerciseId === id && c.gymId === gym.id);
+  if (cal && pref === undefined && log.weight == null) log.unit = cal.unit;
+  if (log.unit && log.weight == null) {
+    const series = exerciseSeries(ex, homeGym().id, S.sessions, S.sets, S.calibrations);
+    const w = suggestStartWeight(series, gym.id, log.unit, S.calibrations, id);
+    if (w != null) { log.weight = w; log.fromFactor = true; }
+  }
   view = { name: 'log' };
   flashId = null;
   render();
@@ -734,6 +923,42 @@ const A = {
   },
 
   'open-session': (d) => { view = { name: 'session', id: d.id }; render(); window.scrollTo(0, 0); },
+  'open-stats': (d) => { view = { name: 'exstats', id: d.id }; render(); window.scrollTo(0, 0); },
+  'chart-mode': (d) => { chartState.mode = d.v; render(); },
+  'chart-range': (d) => { chartState.range = d.v; render(); },
+  'chart-toggle': (d) => {
+    if (chartState.hidden.has(d.id)) chartState.hidden.delete(d.id); else chartState.hidden.add(d.id);
+    render();
+  },
+  'chart-pt': (d, el) => {
+    const info = el.closest('.chartbox').querySelector('.chart-info');
+    if (info) info.textContent = d.info;
+  },
+  'edit-cal': (d) => calSheet(d.gym, d.unit),
+  'add-cal': () => {
+    openSheet(`<h3>Umrechnung für Gym</h3>
+      <label class="field"><span>Gym</span><select id="fGym">${sortedGyms().map((g) => `<option value="${g.id}">${h(g.name)}</option>`).join('')}</select></label>
+      <label class="field"><span>Einheit dort</span><select id="fUnit"><option value="stufe">Stufe</option><option value="kg">kg</option></select></label>
+      <div class="btns"><button data-a="close">Abbrechen</button><button class="primary" data-a="add-cal-next">Weiter</button></div>`);
+  },
+  'add-cal-next': () => calSheet($('#fGym').value, $('#fUnit').value),
+  'save-cal': async () => {
+    const exId = view.id;
+    const { gym, unit } = sheet.dataset;
+    const id = calibrationId(exId, gym, unit);
+    const factor = $('#fFactor') ? parseNum($('#fFactor').value) : null;
+    const kg = $('#fKg') ? parseNum($('#fKg').value) : null;
+    S.calibrations = S.calibrations.filter((c) => c.id !== id);
+    if (factor || kg) {
+      const cal = { id, exerciseId: exId, gymId: gym, unit, factorToHome: factor || null, kgPerUnit: kg || null, source: 'manuell' };
+      S.calibrations.push(cal);
+      await db.put('calibrations', cal);
+    } else {
+      await db.write([{ store: 'calibrations', del: id }]);
+    }
+    closeSheet();
+    render();
+  },
   'delete-session': async () => {
     if (!confirm('Ganzes Training löschen?')) return;
     const id = view.id;
