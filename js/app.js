@@ -11,7 +11,7 @@ import {
 } from './progress.js';
 
 // ---------- Zustand (alles im Speicher, jede Änderung sofort nach IndexedDB) ----------
-const S = { gyms: [], exercises: [], sessions: [], sets: [], meta: new Map() };
+const S = { gyms: [], exercises: [], sessions: [], sets: [], meta: new Map(), calibrations: [] };
 let view = { name: 'home' };
 let log = null; // { exerciseId, weight, unit } während "Satz erfassen"
 let persisted = null;
@@ -158,6 +158,7 @@ async function init() {
   S.exercises = data.exercises;
   S.sessions = data.sessions;
   S.sets = data.sets;
+  S.calibrations = data.calibrations;
   S.meta = new Map(data.meta.map((m) => [m.key, m.value]));
   if (!S.gyms.length) {
     const g = { id: uid(), name: 'Home-Gym', isHome: true };
@@ -527,7 +528,7 @@ async function shareFile(name, text, type) {
 }
 
 function exportData() {
-  return { gyms: S.gyms, exercises: S.exercises, sessions: S.sessions, sets: S.sets, meta: metaArray() };
+  return { gyms: S.gyms, exercises: S.exercises, sessions: S.sessions, sets: S.sets, meta: metaArray(), calibrations: S.calibrations };
 }
 
 $('#importFile').addEventListener('change', async (e) => {

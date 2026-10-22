@@ -151,5 +151,5 @@ export function buildBackup(parsed, mapping, makeId) {
   });
   if (missing.size) throw new Error('Ohne Zuordnung: ' + [...missing].join(', '));
   const meta = [{ key: 'lastGymId', value: home.id }];
-  return { gyms, exercises, sessions, sets, meta };
+  return { gyms, exercises, sessions, sets, meta, calibrations: [] };
 }

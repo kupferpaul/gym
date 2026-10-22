@@ -1,8 +1,8 @@
 // Backup: JSON-Export/-Import und CSV (eine Zeile pro Satz). Pure Funktionen.
 
-export const STORES = ['gyms', 'exercises', 'sessions', 'sets', 'meta'];
+export const STORES = ['gyms', 'exercises', 'sessions', 'sets', 'meta', 'calibrations'];
 const FORMAT = 'gym-tracker';
-const VERSION = 1;
+const VERSION = 2;
 
 // data = { gyms, exercises, sessions, sets, meta } (meta als Array von {key, value})
 export function toJSON(data, now = new Date()) {
@@ -20,6 +20,7 @@ export function fromJSON(text) {
   try { obj = JSON.parse(text); } catch (e) { fail('keine JSON-Datei'); }
   if (!obj || obj.format !== FORMAT) fail('nicht aus dieser App');
   if (obj.version > VERSION) fail('neuere App-Version nötig');
+  if (obj.version < 2 && !obj.calibrations) obj.calibrations = []; // Backups aus Phase 1/2
   STORES.forEach((s) => { if (!Array.isArray(obj[s])) fail('„' + s + '“ fehlt'); });
 
   const ids = (list) => new Set(list.map((x) => x.id));

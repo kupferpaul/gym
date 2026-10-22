@@ -3,6 +3,9 @@ import assert from 'assert';
 import { readFileSync } from 'fs';
 import { parseNotes, buildBackup } from '../tools/notes.mjs';
 import {
+  epley, regionOf, exerciseSeries, regionSeries, recentTrend, suggestStartWeight,
+} from '../js/stats.js';
+import {
   sortExercises, suggestNext, exerciseSequence, lastSet, prefill, stepWeight, historyStep, resolveStep,
   unitForEquipment, formatWeight, formatDate, renumber, todayISO,
 } from '../js/logic.js';
@@ -154,10 +157,18 @@ test('Neu nummerieren nach Löschen', () => {
 const data = {
   gyms, exercises, sessions, sets,
   meta: [{ key: 'settings', value: { weightStepKg: 2.5, weightStepStufe: 1 } }, { key: 'lastGymId', value: 'home' }],
+  calibrations: [{ id: 'chest|fit|stufe', exerciseId: 'chest', gymId: 'fit', unit: 'stufe', factorToHome: 15, source: 'manuell' }],
 };
 
 test('Export → Import ergibt identische Daten', () => {
   assert.deepStrictEqual(fromJSON(toJSON(data)), data);
+});
+
+test('Import: Backup v1 ohne Kalibrierungen bleibt lesbar', () => {
+  const v1 = JSON.parse(toJSON(data));
+  v1.version = 1;
+  delete v1.calibrations;
+  assert.deepStrictEqual(fromJSON(JSON.stringify(v1)).calibrations, []);
 });
 
 test('Import lehnt kaputte Dateien ab', () => {
@@ -258,6 +269,110 @@ test('Geisterwert und Timer', () => {
   assert.strictEqual(remainingSeconds(null, 0), null);
   assert.strictEqual(formatClock(65), '1:05');
 });
+
+// ---------- Statistik / Gym-Vergleich (SPEC §4b, §5) ----------
+{
+  // Szenario wie im echten Verlauf: Berlin (Stufe 130) und ein Reise-Gym (Stufe 7).
+  const ss = [
+    { id: 'b1', date: '2026-09-01', gymId: 'home', startedAt: 1 },
+    { id: 'b2', date: '2026-09-15', gymId: 'home', startedAt: 2 },
+    { id: 'r1', date: '2026-10-01', gymId: 'trip', startedAt: 3 },
+    { id: 'b3', date: '2026-10-10', gymId: 'home', startedAt: 4 },
+    { id: 'r2', date: '2026-10-12', gymId: 'trip', startedAt: 5 },
+  ];
+  const st = [
+    set('b1', 'chest', 1, 100, 'stufe', 10), set('b1', 'chest', 2, 100, 'stufe', 8),
+    set('b2', 'chest', 1, 120, 'stufe', 10),
+    set('r1', 'chest', 1, 7, 'stufe', 10),
+    set('b3', 'chest', 1, 130, 'stufe', 10), set('b3', 'chest', 2, null, null, 12),
+    set('r2', 'chest', 1, 8, 'stufe', 10),
+    set('b1', 'curl', 1, null, null, 12),
+    set('b2', 'row', 1, 9, 'stufe', 10), set('b3', 'row', 1, 11, 'stufe', 10),
+  ];
+  const chest = { id: 'chest', muscleGroup: 'chest' };
+  const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, a + ' ≠ ' + b);
+
+  test('Epley und Regionen', () => {
+    close(epley(100, 30), 200);
+    assert.strictEqual(regionOf('lats'), 'Rücken');
+    assert.strictEqual(regionOf('biceps'), 'Arme');
+    assert.strictEqual(regionOf('xyz'), null);
+  });
+
+  test('Serie: Bezugsgerät Home, Prozent ggü. erstem Training', () => {
+    const s = exerciseSeries(chest, 'home', ss, st);
+    assert.strictEqual(s.ref, 'home|stufe');
+    assert.deepStrictEqual(s.points.map((p) => p.date), ['2026-09-01', '2026-09-15', '2026-10-01', '2026-10-10', '2026-10-12']);
+    close(s.points[1].pct, 20);
+    close(s.points[3].pct, 30);
+    assert.strictEqual(s.points[0].estimated, false);
+  });
+
+  test('Serie: fremdes Gym per geschätztem Faktor (so stark wie zuletzt zuhause)', () => {
+    const s = exerciseSeries(chest, 'home', ss, st);
+    const f = s.factors.get('trip|stufe');
+    assert.strictEqual(f.source, 'geschätzt');
+    assert.strictEqual(f.anchorDate, '2026-09-15');
+    close(f.factor, 120 / 7);
+    close(s.points[2].pct, 20); // erstes Reise-Training = Stand vom 15.9.
+    close(s.points[4].pct, (8 / 7) * 120 - 100); // Stufe 8 dort ≈ 137 zuhause
+    assert.strictEqual(s.points[4].estimated, true);
+  });
+
+  test('Serie: Faktor von Hand bzw. über kg pro Stufe', () => {
+    const manual = exerciseSeries(chest, 'home', ss, st, [{ id: 'chest|trip|stufe', factorToHome: 15 }]);
+    assert.deepStrictEqual(manual.factors.get('trip|stufe'), { factor: 15, source: 'manuell' });
+    close(manual.points[2].pct, 5); // 7 × 15 = 105 ggü. 100
+    // Stufe 7 bleibt "geschätzt" (Index-Stufe), erst kg pro Stufe macht es exakt.
+    assert.strictEqual(manual.points[2].estimated, true);
+    const kg = exerciseSeries(chest, 'home', ss, st, [
+      { id: 'chest|trip|stufe', kgPerUnit: 10 }, { id: 'chest|home|stufe', kgPerUnit: 0.5 }]);
+    assert.strictEqual(kg.factors.get('trip|stufe').factor, 20);
+  });
+
+  test('Serie: ohne Gewicht keine Punkte; Index-Stufen geschätzt', () => {
+    assert.strictEqual(exerciseSeries({ id: 'curl' }, 'home', ss, st).points.length, 0);
+    const row = exerciseSeries({ id: 'row' }, 'home', ss, st);
+    assert.deepStrictEqual(row.points.map((p) => p.estimated), [true, true]);
+    close(row.points[1].pct, (11 / 9 - 1) * 100);
+  });
+
+  test('Serie: ohne Home-Training ist das häufigste Gerät der Bezug', () => {
+    assert.strictEqual(exerciseSeries(chest, 'nirgends', ss, st).ref, 'home|stufe');
+    const only = exerciseSeries(chest, 'home', ss.filter((x) => x.gymId === 'trip'), st);
+    assert.strictEqual(only.ref, 'trip|stufe');
+  });
+
+  test('Regionen: Mittelwert mit letztem bekannten Stand', () => {
+    const a = { exerciseId: 'a', points: [{ date: '2026-01-01', pct: 0, sessionId: 's1' }, { date: '2026-01-10', pct: 20, sessionId: 's3' }] };
+    const b = { exerciseId: 'b', points: [{ date: '2026-01-05', pct: 0, sessionId: 's2', estimated: true }, { date: '2026-01-10', pct: 10, sessionId: 's3' }] };
+    const c = { exerciseId: 'c', points: [{ date: '2026-01-05', pct: 4, sessionId: 's2' }] };
+    const r = regionSeries([a, b, c], [{ id: 'a', muscleGroup: 'chest' }, { id: 'b', muscleGroup: 'chest' }, { id: 'c', muscleGroup: 'biceps' }]);
+    assert.deepStrictEqual(Object.keys(r), ['Brust', 'Arme']);
+    assert.deepStrictEqual(r.Brust.map((p) => [p.date, p.pct, !!p.estimated]),
+      [['2026-01-01', 0, false], ['2026-01-05', 0, true], ['2026-01-10', 15, false]]);
+    assert.deepStrictEqual(r.Brust[2].sessionIds, ['s3']);
+    assert.deepStrictEqual(r.Arme.map((p) => p.pct), [4]);
+  });
+
+  test('Trend der letzten 4 Wochen', () => {
+    const s = exerciseSeries(chest, 'home', ss, st);
+    const t = recentTrend(s, '2026-10-20');
+    assert.strictEqual(t.count, 3);
+    assert.strictEqual(t.result, 1);
+    assert.strictEqual(recentTrend(s, '2026-12-31'), null);
+    const flat = { points: [{ date: '2026-10-01', value: 100 }, { date: '2026-10-10', value: 100.5 }] };
+    assert.strictEqual(recentTrend(flat, '2026-10-20').result, 0);
+  });
+
+  test('Startgewicht aus Umrechnung nur ohne eigene Historie', () => {
+    const cals = [{ id: 'chest|neu|stufe', factorToHome: 13 }];
+    const s = exerciseSeries(chest, 'home', ss, st, cals);
+    assert.strictEqual(suggestStartWeight(s, 'neu', 'stufe', cals, 'chest'), 10);
+    assert.strictEqual(suggestStartWeight(s, 'neu', 'kg', cals, 'chest'), null);
+    assert.strictEqual(suggestStartWeight(s, 'trip', 'stufe', [{ id: 'chest|trip|stufe', factorToHome: 13 }], 'chest'), null);
+  });
+}
 
 // ---------- Notiz-Import (SPEC §8) ----------
 const fixture = readFileSync(new URL('./fixtures/notiz-beispiel.md', import.meta.url), 'utf8');
