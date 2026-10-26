@@ -2,7 +2,7 @@
 import assert from 'assert';
 import { readFileSync } from 'fs';
 import { parseNotes, buildBackup } from '../tools/notes.mjs';
-import { QUOTES, pickQuote } from '../js/quotes.js';
+import { QUOTES, AUTHORS, pickQuote, sourceLabel } from '../js/quotes.js';
 import {
   epley, regionOf, exerciseSeries, regionSeries, recentTrend, suggestStartWeight,
 } from '../js/stats.js';
@@ -301,7 +301,11 @@ test('Zusammenfassung: Vergleich pro Übung, Zählung, Dauer', () => {
 test('Sprüche: fest pro Training, aus der Liste', () => {
   assert.strictEqual(pickQuote('abc'), pickQuote('abc'));
   assert.ok(QUOTES.includes(pickQuote('xyz-123')));
-  assert.ok(QUOTES.every((q) => q.text && q.source));
+  assert.ok(QUOTES.every((q) => q.text && q.source && AUTHORS[q.author]));
+  ['arnold', 'ali', 'lee'].forEach((a) => assert.ok(QUOTES.filter((q) => q.author === a).length >= 10));
+  assert.strictEqual(sourceLabel({ source: 'zugeschrieben' }), '(vielleicht)');
+  assert.strictEqual(sourceLabel({ source: 'zugeschrieben, gekürzt' }), '(vielleicht, gekürzt)');
+  assert.strictEqual(sourceLabel({ source: 'Longstreet (1971)' }), 'Longstreet (1971)');
 });
 
 // ---------- Statistik / Gym-Vergleich (SPEC §4b, §5) ----------

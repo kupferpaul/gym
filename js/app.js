@@ -9,7 +9,7 @@ import {
   previousSets, compareSets, compareSet, ARROWS, feedbackText, suggestIncrease, ghostText,
   remainingSeconds, formatClock, sessionSummary, workingSets,
 } from './progress.js';
-import { pickQuote } from './quotes.js';
+import { AUTHORS, pickQuote, sourceLabel } from './quotes.js';
 import {
   REGIONS, regionOf, exerciseSeries, regionSeries, recentTrend, suggestStartWeight, calibrationId,
 } from './stats.js';
@@ -267,7 +267,9 @@ const VIEWS = {
       ? `${sum.better} von ${sum.compared} Übungen besser als letztes Mal`
       : 'Erstes Training hier – ab jetzt wird verglichen';
     return `<header class="bar"><h1>Training abgeschlossen</h1></header>
-      <div class="quote"><div class="q">„${h(quote.text)}“</div><div class="src">– ${h(quote.source)}</div></div>
+      <div class="quote"><div class="icon">${AUTHORS[quote.author].icon}</div>
+        <div><div class="q">„${h(quote.text)}“</div>
+        <div class="src"><b>${h(AUTHORS[quote.author].name)}</b> ${h(sourceLabel(quote))}</div></div></div>
       <div class="tiles">
         <div class="tile"><b>${sum.exercises.length}</b><span>Übungen</span></div>
         <div class="tile"><b>${sum.setCount}</b><span>Sätze</span></div>
