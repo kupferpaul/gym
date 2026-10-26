@@ -26,16 +26,24 @@ function topWeight(list) {
 
 const totalReps = (list) => list.reduce((n, s) => n + s.reps, 0);
 
+// Arbeitssätze = Sätze mit dem Höchstgewicht. Leichtere Sätze davor (Herantasten, Aufwärmen)
+// zählen nicht. Ohne vergleichbares Gewicht sind alle Sätze Arbeitssätze.
+export function workingSets(list) {
+  const top = topWeight(list);
+  return top ? list.filter((s) => s.weight === top.weight) : list;
+}
+
 // Ergebnis: { result: 1 | 0 | -1, repsOnly, weightDiff, repsDiff, unit }
 export function compareSets(prev, cur) {
   const pw = topWeight(prev);
   const cw = topWeight(cur);
-  const repsDiff = totalReps(cur) - totalReps(prev);
   if (pw && cw && pw.unit === cw.unit) {
     const weightDiff = Math.round((cw.weight - pw.weight) * 100) / 100;
+    const repsDiff = totalReps(workingSets(cur)) - totalReps(workingSets(prev));
     const result = weightDiff !== 0 ? sign(weightDiff) : sign(repsDiff);
     return { result, repsOnly: false, weightDiff, repsDiff, unit: cw.unit };
   }
+  const repsDiff = totalReps(cur) - totalReps(prev);
   return { result: sign(repsDiff), repsOnly: true, weightDiff: 0, repsDiff, unit: null };
 }
 
@@ -69,10 +77,10 @@ export function feedbackText(cmp, prevDate) {
   return repsText(cmp.repsDiff) + since;
 }
 
-// Steigerungs-Hinweis: letztes Mal alle Sätze ≥ Schwelle und das aktuelle Gewicht ist noch nicht höher.
+// Steigerungs-Hinweis: letztes Mal alle Arbeitssätze ≥ Schwelle und das aktuelle Gewicht ist noch nicht höher.
 export function suggestIncrease(prev, currentWeight, currentUnit, threshold = DEFAULT_THRESHOLD) {
   if (!prev || !prev.length || !currentUnit) return false;
-  if (!prev.every((s) => s.reps >= threshold)) return false;
+  if (!workingSets(prev).every((s) => s.reps >= threshold)) return false;
   const pw = topWeight(prev);
   if (!pw || pw.unit !== currentUnit) return false;
   return currentWeight == null || currentWeight <= pw.weight;

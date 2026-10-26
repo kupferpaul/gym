@@ -7,7 +7,7 @@ import {
 import { toJSON, fromJSON, toCSV } from './backup.js';
 import {
   previousSets, compareSets, compareSet, ARROWS, feedbackText, suggestIncrease, ghostText,
-  remainingSeconds, formatClock, sessionSummary,
+  remainingSeconds, formatClock, sessionSummary, workingSets,
 } from './progress.js';
 import { pickQuote } from './quotes.js';
 import {
@@ -296,9 +296,11 @@ const VIEWS = {
     const keys = Array.from({ length: 20 }, (_, i) => `<button data-a="rep" data-n="${i + 1}">${i + 1}</button>`).join('');
     const segBtn = (u, label) => `<button data-a="unit" data-u="${u}" class="${unit === (u || null) ? 'on' : ''}">${label}</button>`;
 
-    // Geisterwert pro Satz: Reps desselben Satzes beim letzten Mal + Pfeil.
+    // Geisterwert pro Satz: Reps desselben Arbeitssatzes beim letzten Mal + Pfeil
+    // (Herantast-Sätze mit weniger Gewicht zählen nicht).
+    const prevWork = prev ? workingSets(prev.sets) : null;
     const ghost = (s) => {
-      const p = prev && prev.sets[s.order - 1];
+      const p = prevWork && prevWork[s.order - 1];
       return p ? `<span class="ghost r${compareSet(p, s)}">${ARROWS[compareSet(p, s)]} (${p.reps})</span>` : '';
     };
     let info = '';
@@ -312,7 +314,7 @@ const VIEWS = {
       info = '<div class="feedback">Erstes Mal hier: Startgewicht aus deiner Umrechnung vorgeschlagen.</div>';
     }
     const step = unit ? fmtNum(stepInfo().step) : '';
-    const target = prev ? ghostText(prev.sets, list.length + 1) : null;
+    const target = prev ? ghostText(prevWork, list.length + 1) : null;
     const targetText = target ? 'Ziel: ' + target : prev ? 'Extra-Satz' : 'Erstes Mal hier';
 
     return `<header class="bar">

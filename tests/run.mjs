@@ -13,7 +13,7 @@ import {
 import { toJSON, fromJSON, toCSV, CSV_HEADER } from '../js/backup.js';
 import {
   compareSets, compareSet, previousSets, feedbackText, suggestIncrease, ghostText, remainingSeconds, formatClock,
-  sessionSummary,
+  sessionSummary, workingSets,
 } from '../js/progress.js';
 
 let passed = 0;
@@ -226,6 +226,20 @@ test('Vergleich: andere Einheit → nur Reps', () => {
 test('Vergleich: Gewicht wechselt innerhalb der Übung → höchstes zählt', () => {
   const prev = [...S(130, 'kg', 10), ...S(120, 'kg', 12)];
   assert.strictEqual(compareSets(prev, S(130, 'kg', 10, 13)).result, 1);
+});
+
+test('Vergleich: Herantast-Sätze zählen nicht (nur Sätze mit Höchstgewicht)', () => {
+  const ramp = [...S(16, 'kg', 20), ...S(20, 'kg', 20), ...S(25, 'kg', 20)];
+  assert.deepStrictEqual(workingSets(ramp).map((s) => s.weight), [25]);
+  const c = compareSets(ramp, S(25, 'kg', 12, 12, 11));
+  assert.deepStrictEqual([c.result, c.repsDiff], [1, 15]);
+  assert.strictEqual(feedbackText(c, '2026-10-20'), '+15 Reps ggü. 20.10.');
+  // Normalfall unverändert: alle Sätze gleiches Gewicht → alle zählen
+  assert.strictEqual(workingSets(S(130, 'kg', 8, 10, 9)).length, 3);
+  // ohne Gewicht: alle Sätze
+  assert.strictEqual(workingSets(S(null, null, 12, 12)).length, 2);
+  // Steigerungs-Hinweis schaut nur auf Arbeitssätze
+  assert.strictEqual(suggestIncrease([...S(20, 'kg', 8), ...S(25, 'kg', 12, 12)], 25, 'kg'), true);
 });
 
 test('Vergleich: einzelner Satz', () => {

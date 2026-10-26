@@ -34,7 +34,8 @@ IndexedDB über `js/db.js`, Offline über `sw.js`. Deploy: GitHub Pages (`kupfer
 - Bei jeder Änderung an ausgelieferten Dateien `CACHE_VERSION` in `sw.js` erhöhen; neue Dateien in `FILES` eintragen.
 - Logik (Vergleich, Sortierung, Backup) als pure Funktionen in `js/logic.js`, `js/progress.js` bzw. `js/backup.js`, mit Tests.
 - Vergleich (§4, vom Nutzer angepasst): höheres Gewicht ist immer besser, niedrigeres immer schlechter;
-  bei gleichem Gewicht entscheiden die Gesamt-Reps; ohne Gewicht/andere Einheit nur Reps, markiert.
+  bei gleichem Gewicht entscheiden die Gesamt-Reps der Arbeitssätze (Sätze mit Höchstgewicht; leichtere
+  Herantast-Sätze zählen nicht); ohne Gewicht/andere Einheit nur Reps, markiert.
 - Satz eintragen ohne Tastatur in < 5 s; Touch-Ziele ≥ 56px, wichtige Tasten unten.
 - Relative Pfade (App läuft unter /gym/). Oberfläche auf Deutsch, Dark Mode.
 - Repo ist öffentlich: keine Schlüssel, keine persönlichen Daten (Seed erst nach Rückfrage committen).
