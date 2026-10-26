@@ -7,8 +7,9 @@ import {
 import { toJSON, fromJSON, toCSV } from './backup.js';
 import {
   previousSets, compareSets, compareSet, ARROWS, feedbackText, suggestIncrease, ghostText,
-  remainingSeconds, formatClock,
+  remainingSeconds, formatClock, sessionSummary,
 } from './progress.js';
+import { pickQuote } from './quotes.js';
 import {
   REGIONS, regionOf, exerciseSeries, regionSeries, recentTrend, suggestStartWeight, calibrationId,
 } from './stats.js';
@@ -47,7 +48,8 @@ const byOrder = (a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.order - b
 function todaySession() {
   const today = todayISO();
   const gym = currentGym();
-  return sortSessions(S.sessions.filter((s) => s.date === today && s.gymId === gym.id)).pop() || null;
+  // Abgeschlossene Trainings bleiben zu; danach am selben Tag beginnt ein neues.
+  return sortSessions(S.sessions.filter((s) => s.date === today && s.gymId === gym.id && !s.finishedAt)).pop() || null;
 }
 
 function metaArray() {
@@ -229,6 +231,14 @@ const VIEWS = {
           <div class="title">${h(ex ? ex.name : '?')}</div><div class="sub">${h(setSummary(list))}</div></div>
           <span class="badge">${arrow}✓ ${list.length}</span></button>`;
       }).join('') + '</div>';
+      out += '<button class="primary finish" data-a="finish">Training abschließen</button>';
+    } else {
+      const finished = sortSessions(S.sessions.filter((s) => s.date === todayISO() && s.finishedAt)).pop();
+      if (finished) {
+        out += `<div class="list" style="margin-top:8px"><button class="row" data-a="show-summary" data-id="${finished.id}">
+          <div class="main"><div class="title">✓ Heute schon trainiert</div><div class="sub">Zusammenfassung ansehen</div></div>
+          <span class="muted">›</span></button></div>`;
+      }
     }
 
     if (!S.exercises.length) {
@@ -236,12 +246,44 @@ const VIEWS = {
         <button class="primary" style="width:100%" data-a="new-ex">+ Neue Übung</button>`;
     }
 
-    out += '<h2>Übungen</h2><div class="list">';
+    // Erledigte Übungen verschwinden aus der Liste (abgehakt), sie stehen oben unter "Heute".
+    const open = sorted.filter((e) => e.id !== suggestId && !doneIds.includes(e.id));
+    out += `<h2>${doneIds.length ? 'Noch offen' : 'Übungen'}</h2><div class="list">`;
     if (suggest) out += exerciseRow(suggest, '<span class="badge">Vorschlag</span>', 'suggest');
-    out += sorted.filter((e) => e.id !== suggestId).map((ex) =>
-      exerciseRow(ex, doneIds.includes(ex.id) ? '<span class="badge">✓</span>' : '')).join('');
+    out += open.map((ex) => exerciseRow(ex)).join('');
+    if (doneIds.length && !suggest && !open.length) out += '<div class="empty small">Alles erledigt 💪</div>';
     out += '<button class="row add" data-a="new-ex">+ Neue Übung</button></div>';
     return out;
+  },
+
+  // Nach "Training abschließen": Spruch, Kennzahlen, Vergleich pro Übung.
+  summary() {
+    const session = S.sessions.find((s) => s.id === view.id);
+    if (!session) { view = { name: 'home' }; return VIEWS.home(); }
+    const sum = sessionSummary(session, S.sessions, S.sets);
+    const quote = pickQuote(session.id);
+    const g = gymById(session.gymId);
+    const headline = sum.compared
+      ? `${sum.better} von ${sum.compared} Übungen besser als letztes Mal`
+      : 'Erstes Training hier – ab jetzt wird verglichen';
+    return `<header class="bar"><h1>Training abgeschlossen</h1></header>
+      <div class="quote"><div class="q">„${h(quote.text)}“</div><div class="src">– ${h(quote.source)}</div></div>
+      <div class="tiles">
+        <div class="tile"><b>${sum.exercises.length}</b><span>Übungen</span></div>
+        <div class="tile"><b>${sum.setCount}</b><span>Sätze</span></div>
+        <div class="tile"><b>${sum.reps}</b><span>Reps</span></div>
+        <div class="tile"><b>${sum.minutes == null ? '–' : sum.minutes}</b><span>Minuten</span></div>
+      </div>
+      <h2>${h(headline)}</h2>
+      <div class="list">${sum.exercises.map((e) => {
+        const ex = exById(e.exerciseId);
+        const fb = e.cmp ? `<span class="trend r${e.cmp.result}">${ARROWS[e.cmp.result]}</span>` : '<span class="trend none">neu</span>';
+        return `<div class="row"><div class="main"><div class="title">${h(ex ? ex.name : '?')}</div>
+          <div class="sub">${h(setSummary(e.sets))}${e.cmp ? ' · ' + h(feedbackText(e.cmp, e.prev.session.date)) : ''}</div></div>${fb}</div>`;
+      }).join('')}</div>
+      <p class="muted small">${h(formatDate(session.date))} · ${h(g ? g.name : '?')}</p>
+      <button class="primary finish" data-a="tab" data-view="sessions">Fortschritt ansehen</button>
+      <div class="btns"><button data-a="home">Fertig</button><button class="ghost" data-a="reopen" data-id="${session.id}">Doch weitermachen</button></div>`;
   },
 
   log() {
@@ -923,6 +965,28 @@ const A = {
   },
 
   'open-session': (d) => { view = { name: 'session', id: d.id }; render(); window.scrollTo(0, 0); },
+  finish: async () => {
+    const session = todaySession();
+    if (!session) return;
+    session.finishedAt = Date.now();
+    await db.put('sessions', session);
+    stopTimer();
+    view = { name: 'summary', id: session.id };
+    render();
+    window.scrollTo(0, 0);
+  },
+  'show-summary': (d) => { view = { name: 'summary', id: d.id }; render(); window.scrollTo(0, 0); },
+  reopen: async (d) => {
+    const session = S.sessions.find((s) => s.id === d.id);
+    if (!session) return;
+    // Ein inzwischen neu begonnenes Training am selben Tag/Gym hat Vorrang; dann nicht wieder öffnen.
+    const other = todaySession();
+    if (other && other.id !== session.id) { toast('Es läuft schon ein neues Training'); return; }
+    delete session.finishedAt;
+    await db.put('sessions', session);
+    if (session.gymId !== currentGym().id) await setMeta('lastGymId', session.gymId);
+    A.home();
+  },
   'open-stats': (d) => { view = { name: 'exstats', id: d.id }; render(); window.scrollTo(0, 0); },
   'chart-mode': (d) => { chartState.mode = d.v; render(); },
   'chart-range': (d) => { chartState.range = d.v; render(); },

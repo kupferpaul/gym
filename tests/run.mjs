@@ -2,6 +2,7 @@
 import assert from 'assert';
 import { readFileSync } from 'fs';
 import { parseNotes, buildBackup } from '../tools/notes.mjs';
+import { QUOTES, pickQuote } from '../js/quotes.js';
 import {
   epley, regionOf, exerciseSeries, regionSeries, recentTrend, suggestStartWeight,
 } from '../js/stats.js';
@@ -12,6 +13,7 @@ import {
 import { toJSON, fromJSON, toCSV, CSV_HEADER } from '../js/backup.js';
 import {
   compareSets, compareSet, previousSets, feedbackText, suggestIncrease, ghostText, remainingSeconds, formatClock,
+  sessionSummary,
 } from '../js/progress.js';
 
 let passed = 0;
@@ -268,6 +270,24 @@ test('Geisterwert und Timer', () => {
   assert.strictEqual(remainingSeconds(10000, 12000), 0);
   assert.strictEqual(remainingSeconds(null, 0), null);
   assert.strictEqual(formatClock(65), '1:05');
+});
+
+// ---------- Training abschließen ----------
+test('Zusammenfassung: Vergleich pro Übung, Zählung, Dauer', () => {
+  const sum = sessionSummary(sessions[1], sessions, sets); // s2 (19.8.) ggü. s1 (12.8.) im Home-Gym
+  assert.deepStrictEqual(sum.exercises.map((e) => e.exerciseId), ['chest', 'row']);
+  assert.deepStrictEqual(sum.exercises.map((e) => e.cmp.result), [1, 1]); // 130 > 120, 52,5 > 50
+  assert.deepStrictEqual([sum.setCount, sum.reps, sum.better, sum.compared], [4, 38, 2, 2]);
+  assert.strictEqual(sum.minutes, 1); // createdAt im Test nur ms auseinander → mindestens 1 Min.
+  const first = sessionSummary(sessions[0], sessions, sets);
+  assert.deepStrictEqual([first.compared, first.better], [0, 0]);
+  assert.strictEqual(sessionSummary({ id: 'leer', date: '2026-09-01', gymId: 'home' }, sessions, sets).minutes, null);
+});
+
+test('Sprüche: fest pro Training, aus der Liste', () => {
+  assert.strictEqual(pickQuote('abc'), pickQuote('abc'));
+  assert.ok(QUOTES.includes(pickQuote('xyz-123')));
+  assert.ok(QUOTES.every((q) => q.text && q.source));
 });
 
 // ---------- Statistik / Gym-Vergleich (SPEC §4b, §5) ----------

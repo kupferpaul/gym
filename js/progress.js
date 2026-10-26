@@ -85,6 +85,31 @@ export function ghostText(prev, n) {
   return 'S' + n + ' · ' + (s.weight == null ? '' : formatWeight(s.weight, s.unit) + ' × ') + s.reps;
 }
 
+// Zusammenfassung nach "Training abschließen": pro Übung Vergleich mit dem letzten Mal im selben Gym.
+// Dauer = erster bis letzter Satz (vergessenes Abschließen verfälscht sie so nicht).
+export function sessionSummary(session, sessions, sets) {
+  const own = sets.filter((s) => s.sessionId === session.id).sort(bySeq);
+  const order = [];
+  own.forEach((s) => { if (!order.includes(s.exerciseId)) order.push(s.exerciseId); });
+  const exercises = order.map((exerciseId) => {
+    const list = own.filter((s) => s.exerciseId === exerciseId);
+    const before = sessions.filter((x) => x.date < session.date || (x.date === session.date && (x.startedAt || 0) < (session.startedAt || 0)));
+    const prev = previousSets(exerciseId, session.gymId, before, sets, session.id);
+    return { exerciseId, sets: list, prev, cmp: prev ? compareSets(prev.sets, list) : null };
+  });
+  const times = own.map((s) => s.createdAt).filter(Boolean);
+  const minutes = times.length > 1 ? Math.max(1, Math.round((Math.max(...times) - Math.min(...times)) / 60000)) : null;
+  const compared = exercises.filter((e) => e.cmp);
+  return {
+    exercises,
+    setCount: own.length,
+    reps: own.reduce((n, s) => n + s.reps, 0),
+    minutes,
+    better: compared.filter((e) => e.cmp.result > 0).length,
+    compared: compared.length,
+  };
+}
+
 // Pausentimer: Restsekunden aus Endzeitpunkt (zeitstempelbasiert).
 export function remainingSeconds(endAt, now) {
   if (!endAt) return null;

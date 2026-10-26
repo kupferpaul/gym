@@ -179,6 +179,16 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: 
 .trend.none { color: var(--muted); }
 .cal { font-size: 14px; }
 
+/* Training abschließen */
+button.finish { width: 100%; margin-top: 12px; min-height: 60px; font-size: 18px; }
+.quote { background: var(--card); border-radius: 14px; padding: 18px 16px; margin-bottom: 12px; border-left: 4px solid var(--accent); }
+.quote .q { font-size: 20px; font-weight: 700; line-height: 1.3; }
+.quote .src { color: var(--muted); font-size: 14px; margin-top: 8px; }
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.tile { background: var(--card); border-radius: 12px; padding: 10px 4px; text-align: center; }
+.tile b { display: block; font-size: 24px; }
+.tile span { color: var(--muted); font-size: 13px; }
+
 /* Suche */
 .search {
   width: 100%; font: inherit; font-size: 18px; padding: 14px; border-radius: 12px;
