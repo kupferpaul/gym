@@ -1,10 +1,11 @@
-const CACHE_VERSION = 7;
+const CACHE_VERSION = 8;
 const CACHE = 'gym-v' + CACHE_VERSION;
 const FILES = [
   './', 'index.html', 'style.css', 'manifest.json',
   'js/app.js', 'js/db.js', 'js/logic.js', 'js/backup.js', 'js/progress.js', 'js/stats.js', 'js/chart.js', 'js/quotes.js',
   'data/exercises.json',
-  'icons/apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png',
+  'icons/apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png',
+  'icons/favicon.svg', 'icons/favicon-32.png', 'brand/satz-symbol-color.svg',
 ];
 
 self.addEventListener('install', (e) => {

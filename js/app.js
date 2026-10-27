@@ -84,18 +84,18 @@ function stopTimer() {
 const timerVisible = () => timer && Date.now() - timer.endAt < 10 * 60 * 1000;
 
 function timerHtml(big) {
-  if (!timerVisible()) return big ? `<span class="timer idle">⏱ ${formatClock(settings().restSeconds)}</span>` : '';
+  if (!timerVisible()) return big ? `<span class="timer idle">Pause ${formatClock(settings().restSeconds)}</span>` : '';
   const sec = remainingSeconds(timer.endAt, Date.now());
   const pct = sec ? (sec / timer.duration) * 100 : 0;
   return `<button class="timer ${sec ? '' : 'done'} ${big ? '' : 'mini'}" data-a="timer-stop" id="timer${big ? '' : 'Mini'}">
-    <span class="bar" style="width:${pct}%"></span><span class="t">${sec ? '⏱ ' + formatClock(sec) : 'Los!'}</span></button>`;
+    <span class="bar" style="width:${pct}%"></span><span class="t">${sec ? formatClock(sec) : 'Los'}</span></button>`;
 }
 
 function tick() {
   if (!timer) return;
   const sec = remainingSeconds(timer.endAt, Date.now());
   document.querySelectorAll('.timer:not(.idle)').forEach((el) => {
-    el.querySelector('.t').textContent = sec ? '⏱ ' + formatClock(sec) : 'Los!';
+    el.querySelector('.t').textContent = sec ? formatClock(sec) : 'Los';
     el.querySelector('.bar').style.width = (sec ? (sec / timer.duration) * 100 : 0) + '%';
     el.classList.toggle('done', !sec);
   });
@@ -184,6 +184,9 @@ function render() {
   document.querySelectorAll('#tabs button').forEach((b) =>
     b.classList.toggle('on', b.dataset.view === view.name));
   app.innerHTML = VIEWS[view.name]();
+  // Platz unter dem Inhalt genau so hoch wie das Eingabe-Panel, damit nichts dahinter verschwindet.
+  const panel = app.querySelector('.panel');
+  app.style.paddingBottom = panel ? panel.offsetHeight + 16 + 'px' : '';
   updateWakeLock();
   if (view.name === 'new') {
     const inp = $('#q');
@@ -199,6 +202,11 @@ function setSummary(list) {
   if (sameWeight) return formatWeight(sorted[0].weight, sorted[0].unit) + ' · ' + sorted.map((s) => s.reps).join(' · ');
   return sorted.map((s) => formatWeight(s.weight, s.unit) + ' × ' + s.reps).join(' · ');
 }
+
+// Logo-Kleinversion (brand/satz-symbol-small.svg, für unter 48 px), eingefärbt über CSS-Variablen.
+const LOGO_SMALL = '<svg viewBox="0 0 256 256" role="img" aria-label="Satz">'
+  + '<rect class="logo-plus" x="108" y="20" width="40" height="96" rx="20"/><rect class="logo-plus" x="80" y="48" width="96" height="40" rx="20"/>'
+  + '<rect class="logo-plate" x="48" y="136" width="160" height="40" rx="20"/><rect class="logo-plate" x="48" y="196" width="160" height="40" rx="20"/></svg>';
 
 function exerciseRow(ex, extra = '', cls = '') {
   return `<button class="row ${cls}" data-a="open-ex" data-id="${ex.id}">
@@ -216,7 +224,8 @@ const VIEWS = {
     const suggestId = sorted.length ? suggestNext(S.sets, doneIds[doneIds.length - 1] || null, doneIds) : null;
     const suggest = suggestId && exById(suggestId);
 
-    let out = `<header class="bar">
+    let out = `<div class="brandbar">${LOGO_SMALL}<span class="word">Satz</span></div>
+      <header class="bar">
       <h1>${h(formatDate(todayISO()))}</h1>
       ${timerHtml(false)}
       <button class="chip" data-a="pick-gym">${h(gym.name)} ▾</button></header>`;
@@ -226,7 +235,8 @@ const VIEWS = {
         const ex = exById(id);
         const list = todaySets.filter((s) => s.exerciseId === id);
         const prev = previousSets(id, gym.id, S.sessions, S.sets, session.id);
-        const arrow = prev ? ARROWS[compareSets(prev.sets, list).result] + ' ' : '';
+        const res = prev ? compareSets(prev.sets, list).result : null;
+        const arrow = prev ? `<span class="r${res}">${ARROWS[res]}</span> ` : '';
         return `<button class="row" data-a="open-ex" data-id="${id}"><div class="main">
           <div class="title">${h(ex ? ex.name : '?')}</div><div class="sub">${h(setSummary(list))}</div></div>
           <span class="badge">${arrow}✓ ${list.length}</span></button>`;
@@ -242,7 +252,7 @@ const VIEWS = {
     }
 
     if (!S.exercises.length) {
-      return out + `<div class="empty">Noch keine Übungen.<br>Lege deine erste an.</div>
+      return out + `<div class="empty"><img src="brand/satz-symbol-color.svg" alt="">Noch keine Übungen.<br>Lege deine erste an.</div>
         <button class="primary" style="width:100%" data-a="new-ex">+ Neue Übung</button>`;
     }
 
@@ -251,7 +261,7 @@ const VIEWS = {
     out += `<h2>${doneIds.length ? 'Noch offen' : 'Übungen'}</h2><div class="list">`;
     if (suggest) out += exerciseRow(suggest, '<span class="badge">Vorschlag</span>', 'suggest');
     out += open.map((ex) => exerciseRow(ex)).join('');
-    if (doneIds.length && !suggest && !open.length) out += '<div class="empty small">Alles erledigt 💪</div>';
+    if (doneIds.length && !suggest && !open.length) out += '<div class="empty small">Alles erledigt</div>';
     out += '<button class="row add" data-a="new-ex">+ Neue Übung</button></div>';
     return out;
   },
@@ -683,8 +693,8 @@ async function addSet(reps) {
   startTimer();
   flashId = set.id;
   render();
-  const rows = document.querySelectorAll('.sets .row');
-  if (rows.length) rows[rows.length - 1].scrollIntoView({ block: 'nearest' });
+  // Ganz nach unten: letzter Satz und Rückmeldung stehen dann direkt über dem (hohen) Panel.
+  window.scrollTo(0, document.documentElement.scrollHeight);
 }
 
 async function deleteSet(id) {

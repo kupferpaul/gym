@@ -52,7 +52,8 @@ export function compareSet(prev, cur) {
   return compareSets([prev], [cur]).result;
 }
 
-export const ARROWS = { 1: '↑', 0: '=', '-1': '↓' };
+// Status-Pfeile nach BRAND.md: besser ▲, gleich ▬, schlechter ▼ (Farbe kommt per CSS-Klasse r1/r0/r-1).
+export const ARROWS = { 1: '▲', 0: '▬', '-1': '▼' };
 
 function shortDate(iso) {
   const [, m, d] = iso.split('-').map(Number);

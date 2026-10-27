@@ -17,6 +17,17 @@ IndexedDB über `js/db.js`, Offline über `sw.js`. Deploy: GitHub Pages (`kupfer
 - `private/` – gitignored: Notiz, Zuordnung, erzeugte Import-Datei (persönliche Daten)
 - `data/exercises.json` – reduzierte free-exercise-db (Public Domain)
 
+## Design
+- Verbindlich für alles Visuelle: **BRAND.md** (App „Satz“). Logos in `brand/`, Icons in `icons/`.
+- Nur Dark Mode. Farben nur als Variablen auf `:root` in style.css, keine Hex-Werte im restlichen Code:
+  `--bg` #1E1F22 Graphit · `--surface` #2A2B2F Graphit hell · `--text` #EDEAE3 Kreide ·
+  `--accent` #F2B33D Messing (Fortschritt + eine Hauptaktion pro Screen) · `--muted` #8E8B85 Stein · `--down` #E5675A Rost
+- Status immer mit Pfeil: besser ▲ Messing, gleich ▬ Stein, schlechter ▼ Rost.
+- Ausnahme: Diagramm-Linien nutzen die geprüfte Palette `--s1..--s8` (Dark-Variante), nur im Diagramm.
+- Schrift: `ui-rounded, -apple-system, system-ui, sans-serif`; Zahlen `tabular-nums`.
+- Touch-Ziele ≥ 56 px, Nummernpad-Tasten ≥ 64 px; Radien Buttons 14 px, Karten 20 px.
+- Keine Emojis in der UI. Bewusste Ausnahme: Zitate in der Zusammenfassung (vom Nutzer gewünscht).
+
 ## Befehle
 - Lokal starten: `python3 -m http.server 8000` → http://localhost:8000/
 - Tests: `node tests/run.mjs`

@@ -83,6 +83,7 @@ Regeln:
 ## 9. Technik und Rahmen
 * PWA, offline-fähig, auf GitHub Pages (wie meine Vokabel-App), installierbar auf dem iPhone-Homescreen
 * Mobile first, große Touch-Ziele, Daumenbedienung, Dark Mode
+* Visuelles (Farben, Schrift, Logo, Icons, Sprache der UI): verbindlich nach **BRAND.md**
 * So einfach wie möglich: kein Backend, kein Login. Stack schlägst du im Plan vor und begründest kurz
 * Oberfläche auf Deutsch
 
