@@ -4,6 +4,10 @@ import { readFileSync } from 'fs';
 import { parseNotes, buildBackup } from '../tools/notes.mjs';
 import { QUOTES, AUTHORS, pickQuote, sourceLabel } from '../js/quotes.js';
 import {
+  RUN_DEFAULTS, MODE_TEXT, floorTo, roundTo, plan, assess, suggestType, paceSec, formatPace, formatDuration, formatKm,
+  parseDuration, isDeloadWeek, weekKey, morningCheckDue,
+} from '../js/run.js';
+import {
   epley, regionOf, exerciseSeries, regionSeries, recentTrend, suggestStartWeight,
 } from '../js/stats.js';
 import {
@@ -409,6 +413,146 @@ test('Sprüche: fest pro Training, aus der Liste', () => {
     assert.strictEqual(suggestStartWeight(s, 'neu', 'stufe', cals, 'chest'), 10);
     assert.strictEqual(suggestStartWeight(s, 'neu', 'kg', cals, 'chest'), null);
     assert.strictEqual(suggestStartWeight(s, 'trip', 'stufe', [{ id: 'chest|trip|stufe', factorToHome: 13 }], 'chest'), null);
+  });
+}
+
+// ---------- Lauf (Brief Lauf-Funktion, Phase 1) ----------
+{
+  let n = 0;
+  // Lauf an Tag `day` (YYYY-MM-DD); Standard: 7:00 min/km (kein Pace-Hinweis), Knie 0, lang.
+  const R = (day, km, extra = {}) => ({
+    id: 'run' + ++n, date: day + 'T18:00', distanceKm: km, durationSec: Math.round(km * 420),
+    kneeDuring: 0, kneeMorning: null, runType: 'lang', surface: 'draußen', source: 'manual', ...extra,
+  });
+  const NOW = '2026-10-20';
+
+  test('Lauf: Rundung robust (3,0 × 1,1 = 3,3)', () => {
+    assert.strictEqual(floorTo(3.0 * 1.1, 0.1), 3.3);
+    assert.strictEqual(floorTo(2.5 * 1.1, 0.1), 2.7);
+    assert.strictEqual(roundTo(3.3 * 0.75, 0.5), 2.5);
+  });
+
+  test('Lauf: keine Läufe, Basiswert 2,0 → Soll lang 2,2', () => {
+    assert.strictEqual(plan([], NOW).sollLong, 2.2);
+  });
+
+  test('Lauf: 2,0 vor 10 Tagen, 2,5 vor 3 Tagen → L30 2,5, Soll 2,7', () => {
+    const p = plan([R('2026-10-10', 2.0), R('2026-10-17', 2.5)], NOW);
+    assert.deepStrictEqual([p.l30, p.sollLong, p.mode], [2.5, 2.7, 'green']);
+  });
+
+  test('Lauf: Lauf vor 31 Tagen zählt nicht → Soll 3,3', () => {
+    const p = plan([R('2026-09-19', 5.0), R('2026-10-15', 3.0)], NOW);
+    assert.deepStrictEqual([p.l30, p.sollLong], [3.0, 3.3]);
+  });
+
+  test('Lauf: 3,0 grün, dann 3,3 mit Knie 4 → Rot, Soll 3,0', () => {
+    const runs = [R('2026-10-12', 3.0), R('2026-10-15', 3.3, { kneeDuring: 4 })];
+    assert.strictEqual(assess(runs[1], runs).status, 'red');
+    const p = plan(runs, NOW);
+    assert.deepStrictEqual([p.mode, p.sollLong], ['red', 3.0]);
+    assert.strictEqual(MODE_TEXT[p.mode], 'Distanz halten, nicht steigern.');
+  });
+
+  test('Lauf: 3,0 grün, dann zwei rote → Rot zweimal, Soll 2,4, Hinweis abklären', () => {
+    const runs = [R('2026-10-10', 3.0), R('2026-10-13', 3.3, { kneeDuring: 5 }), R('2026-10-16', 3.0, { kneeDuring: 4 })];
+    assert.strictEqual(assess(runs[2], runs).status, 'red2');
+    const p = plan(runs, NOW);
+    assert.deepStrictEqual([p.mode, p.sollLong], ['red2', 2.4]);
+    assert.match(MODE_TEXT[p.mode], /abklären/);
+  });
+
+  test('Lauf: Morgen-Check "schlechter" macht 3,3 nachträglich rot → Soll 3,0', () => {
+    const runs = [R('2026-10-12', 3.0), R('2026-10-15', 3.3, { kneeDuring: 2 })];
+    assert.strictEqual(plan(runs, NOW).sollLong, 3.6);
+    runs[1].kneeMorning = 'schlechter';
+    assert.strictEqual(assess(runs[1], runs).status, 'red');
+    assert.strictEqual(plan(runs, NOW).sollLong, 3.0);
+  });
+
+  test('Lauf: rote Läufe zählen nicht für L30 (nach Erholung vom schmerzfreien Lauf aus)', () => {
+    const runs = [R('2026-10-08', 3.0), R('2026-10-11', 3.3, { kneeDuring: 5 }), R('2026-10-14', 3.0)];
+    const p = plan(runs, NOW);
+    assert.deepStrictEqual([p.mode, p.l30, p.sollLong], ['green', 3.0, 3.3]);
+  });
+
+  test('Lauf: Montag lang, Dienstag kurz → Gelb Lauftag nach Lauftag', () => {
+    const runs = [R('2026-10-12', 3.0), R('2026-10-13', 2.0, { runType: 'kurz' })];
+    const a = assess(runs[1], runs);
+    assert.strictEqual(a.status, 'yellow');
+    assert.ok(a.reasons.includes('Lauftag direkt nach Lauftag.'));
+  });
+
+  test('Lauf: Montag lang, Dienstag aufwärmen → keine Warnung', () => {
+    const runs = [R('2026-10-12', 3.0), R('2026-10-13', 1.5, { runType: 'aufwärmen' })];
+    const a = assess(runs[1], runs);
+    assert.deepStrictEqual([a.status, a.reasons, a.hints], ['green', [], []]);
+    // zählt aber für L30
+    assert.strictEqual(plan([R('2026-10-12', 1.0), R('2026-10-13', 1.5, { runType: 'aufwärmen' })], NOW).l30, 1.5);
+  });
+
+  test('Lauf: 3,5 km in 20:04 → Pace 5:44, Gelb schneller als 6:30', () => {
+    const r = R('2026-10-15', 3.5, { durationSec: parseDuration('20:04') });
+    assert.strictEqual(formatPace(paceSec(r)), '5:44 min/km');
+    const a = assess(r, [r]);
+    assert.strictEqual(a.status, 'yellow');
+    assert.ok(a.reasons.includes('Pace 5:44 min/km schneller als 6:30.'));
+  });
+
+  test('Lauf: letzter langer 3,3 → Soll kurz 2,5', () => {
+    assert.strictEqual(plan([R('2026-10-15', 3.3)], NOW).sollShort, 2.5);
+  });
+
+  test('Lauf: 4,0 km bei Soll 3,3 → Gelb 21 % über Soll', () => {
+    const runs = [R('2026-10-10', 3.0), R('2026-10-15', 4.0)];
+    const a = assess(runs[1], runs);
+    assert.strictEqual(a.sollBefore, 3.3);
+    assert.strictEqual(a.status, 'yellow');
+    assert.ok(a.reasons[0].startsWith('21 % über Soll'));
+  });
+
+  test('Lauf: Lauftyp-Vorschlag, Fortschritt, Puls, Kadenz', () => {
+    assert.strictEqual(suggestType(3.0, 3.3), 'lang'); // 3,0 ≥ 2,97
+    assert.strictEqual(suggestType(2.9, 3.3), 'kurz');
+    assert.strictEqual(plan([R('2026-10-15', 3.0)], NOW).progress, 0.3);
+    const hr = R('2026-10-15', 2.0, { avgHr: 160 });
+    assert.ok(assess(hr, [hr], { ...RUN_DEFAULTS, hrMax: 150 }).reasons.includes('Puls 160 über 150 bpm.'));
+    const cad = R('2026-10-15', 2.0, { kneeDuring: 2, cadenceSpm: 160 });
+    assert.deepStrictEqual(assess(cad, [cad]).hints, ['Schrittfrequenz um 5–10 % erhöhen: Ziel 168–176 spm.']);
+  });
+
+  test('Lauf: unvollständig (ohne Knie) zählt nicht', () => {
+    const runs = [R('2026-10-10', 3.0), R('2026-10-15', 5.0, { kneeDuring: null, source: 'garmin' })];
+    assert.strictEqual(assess(runs[1], runs).status, 'incomplete');
+    assert.strictEqual(plan(runs, NOW).l30, 3.0);
+  });
+
+  test('Lauf: Entlastungswoche jede 4. Kalenderwoche, überspringbar', () => {
+    // erster Lauf Mo 5.10. → Woche 4 beginnt Mo 26.10.
+    const runs = [R('2026-10-05', 2.0), R('2026-10-20', 3.0)];
+    assert.strictEqual(isDeloadWeek('2026-10-05', '2026-10-26'), true);
+    assert.strictEqual(isDeloadWeek('2026-10-05', '2026-10-25'), false);
+    const p = plan(runs, '2026-10-27');
+    assert.deepStrictEqual([p.mode, p.sollLong], ['deload', 2.5]); // 85 % von 3,0 = 2,55 → 2,5
+    assert.strictEqual(plan(runs, '2026-10-27', RUN_DEFAULTS, { skipDeloadWeek: weekKey('2026-10-27') }).sollLong, 3.3);
+  });
+
+  test('Lauf: Morgen-Check ab 5 Uhr am Folgetag, 48 h offen', () => {
+    const r = R('2026-10-20', 3.0);
+    assert.strictEqual(morningCheckDue([r], '2026-10-21T04:59'), null);
+    assert.strictEqual(morningCheckDue([r], '2026-10-21T05:00'), r);
+    assert.strictEqual(morningCheckDue([r], '2026-10-23T04:59'), r);
+    assert.strictEqual(morningCheckDue([r], '2026-10-23T05:00'), null);
+    assert.strictEqual(morningCheckDue([{ ...r, kneeMorning: 'gleich' }], '2026-10-21T08:00'), null);
+    assert.strictEqual(morningCheckDue([{ ...r, morningSkipped: true }], '2026-10-21T08:00'), null);
+  });
+
+  test('Lauf: Dauer parsen und formatieren', () => {
+    assert.strictEqual(parseDuration('18:20'), 1100);
+    assert.strictEqual(parseDuration('1:05:30'), 3930);
+    assert.strictEqual(parseDuration('abc'), null);
+    assert.strictEqual(formatDuration(3930), '1:05:30');
+    assert.strictEqual(formatKm(3.25), '3,25 km');
   });
 }
 
