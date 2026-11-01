@@ -3,7 +3,7 @@
 import { STORES } from './backup.js';
 
 const NAME = 'gym';
-const VERSION = 2;
+const VERSION = 3;
 let dbp = null;
 
 function open() {
@@ -24,6 +24,10 @@ function open() {
       if (e.oldVersion < 2) {
         // Phase 3: Umrechnung pro Übung + Gym + Einheit (id = "exerciseId|gymId|unit").
         db.createObjectStore('calibrations', { keyPath: 'id' });
+      }
+      if (e.oldVersion < 3) {
+        // Lauf-Funktion: ein Eintrag pro Lauf.
+        db.createObjectStore('runs', { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);

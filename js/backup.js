@@ -1,8 +1,8 @@
-// Backup: JSON-Export/-Import und CSV (eine Zeile pro Satz). Pure Funktionen.
+// Backup: JSON-Export/-Import und CSV (eine Zeile pro Satz bzw. pro Lauf). Pure Funktionen.
 
-export const STORES = ['gyms', 'exercises', 'sessions', 'sets', 'meta', 'calibrations'];
+export const STORES = ['gyms', 'exercises', 'sessions', 'sets', 'meta', 'calibrations', 'runs'];
 const FORMAT = 'gym-tracker';
-const VERSION = 2;
+const VERSION = 3;
 
 // data = { gyms, exercises, sessions, sets, meta } (meta als Array von {key, value})
 export function toJSON(data, now = new Date()) {
@@ -21,6 +21,7 @@ export function fromJSON(text) {
   if (!obj || obj.format !== FORMAT) fail('nicht aus dieser App');
   if (obj.version > VERSION) fail('neuere App-Version nötig');
   if (obj.version < 2 && !obj.calibrations) obj.calibrations = []; // Backups aus Phase 1/2
+  if (obj.version < 3 && !obj.runs) obj.runs = []; // Backups vor der Lauf-Funktion
   STORES.forEach((s) => { if (!Array.isArray(obj[s])) fail('„' + s + '“ fehlt'); });
 
   const ids = (list) => new Set(list.map((x) => x.id));
@@ -40,6 +41,12 @@ export function fromJSON(text) {
     if (s.weight !== null && typeof s.weight !== 'number') fail('Gewicht ' + s.weight);
   });
   obj.meta.forEach((m) => { if (typeof m.key !== 'string') fail('Einstellung ohne Schlüssel'); });
+  obj.runs.forEach((r) => {
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(r.date)) fail('Lauf-Datum ' + r.date);
+    if (typeof r.distanceKm !== 'number' || r.distanceKm <= 0) fail('Lauf-Distanz ' + r.distanceKm);
+    if (typeof r.durationSec !== 'number' || r.durationSec < 0) fail('Lauf-Dauer ' + r.durationSec);
+    if (r.kneeDuring != null && (typeof r.kneeDuring !== 'number' || r.kneeDuring < 0 || r.kneeDuring > 10)) fail('Knie ' + r.kneeDuring);
+  });
 
   const data = {};
   STORES.forEach((s) => { data[s] = obj[s]; });
@@ -72,4 +79,16 @@ export function toCSV(data) {
       return [session.date, gym.name, ex.name, ex.muscleGroup, set.order, set.weight, set.unit, set.reps];
     });
   return [CSV_HEADER, ...rows].map((r) => r.map(cell).join(',')).join('\n') + '\n';
+}
+
+export const RUN_CSV_HEADER = ['date', 'distanceKm', 'durationSec', 'paceSecPerKm', 'kneeDuring', 'kneeMorning',
+  'runType', 'surface', 'avgHr', 'maxHr', 'cadenceSpm', 'note', 'source', 'externalId'];
+
+// Eine Zeile pro Lauf, chronologisch (für den späteren Sheet-Sync).
+export function runsToCSV(data) {
+  const rows = (data.runs || []).slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).map((r) => [
+    r.date, r.distanceKm, r.durationSec, r.distanceKm > 0 ? Math.round(r.durationSec / r.distanceKm) : '',
+    r.kneeDuring, r.kneeMorning, r.runType, r.surface, r.avgHr, r.maxHr, r.cadenceSpm, r.note, r.source, r.externalId,
+  ]);
+  return [RUN_CSV_HEADER, ...rows].map((r) => r.map(cell).join(',')).join('\n') + '\n';
 }

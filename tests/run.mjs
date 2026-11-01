@@ -14,7 +14,8 @@ import {
   sortExercises, suggestNext, exerciseSequence, lastSet, prefill, stepWeight, historyStep, resolveStep,
   unitForEquipment, formatWeight, formatDate, renumber, todayISO,
 } from '../js/logic.js';
-import { toJSON, fromJSON, toCSV, CSV_HEADER } from '../js/backup.js';
+import { toJSON, fromJSON, toCSV, CSV_HEADER, runsToCSV, RUN_CSV_HEADER } from '../js/backup.js';
+import { makeRun, findByExternalId } from '../js/sources.js';
 import {
   compareSets, compareSet, previousSets, feedbackText, suggestIncrease, ghostText, remainingSeconds, formatClock,
   sessionSummary, workingSets,
@@ -164,6 +165,11 @@ const data = {
   gyms, exercises, sessions, sets,
   meta: [{ key: 'settings', value: { weightStepKg: 2.5, weightStepStufe: 1 } }, { key: 'lastGymId', value: 'home' }],
   calibrations: [{ id: 'chest|fit|stufe', exerciseId: 'chest', gymId: 'fit', unit: 'stufe', factorToHome: 15, source: 'manuell' }],
+  runs: [{
+    id: 'r1', date: '2026-10-20T18:30', distanceKm: 3.25, durationSec: 1100, kneeDuring: 2, kneeMorning: null,
+    runType: 'lang', surface: 'draußen', avgHr: null, maxHr: null, cadenceSpm: null, note: 'Park, "windig"',
+    source: 'manual', externalId: null,
+  }],
 };
 
 test('Export → Import ergibt identische Daten', () => {
@@ -175,6 +181,31 @@ test('Import: Backup v1 ohne Kalibrierungen bleibt lesbar', () => {
   v1.version = 1;
   delete v1.calibrations;
   assert.deepStrictEqual(fromJSON(JSON.stringify(v1)).calibrations, []);
+});
+
+test('Backup v3: Läufe drin, v2 ohne Läufe importierbar, kaputter Lauf abgelehnt', () => {
+  assert.strictEqual(fromJSON(toJSON(data)).runs[0].distanceKm, 3.25);
+  const v2 = JSON.parse(toJSON(data));
+  v2.version = 2;
+  delete v2.runs;
+  assert.deepStrictEqual(fromJSON(JSON.stringify(v2)).runs, []);
+  const bad = JSON.parse(toJSON(data));
+  bad.runs[0].kneeDuring = 11;
+  assert.throws(() => fromJSON(JSON.stringify(bad)), /Knie/);
+});
+
+test('CSV Läufe: eine Zeile pro Lauf mit Pace', () => {
+  const lines = runsToCSV(data).trim().split('\n');
+  assert.strictEqual(lines[0], RUN_CSV_HEADER.join(','));
+  assert.strictEqual(lines[1], '2026-10-20T18:30,3.25,1100,338,2,,lang,draußen,,,,"Park, ""windig""",manual,');
+});
+
+test('Datenquelle: Lauf normalisieren, Duplikat per externalId', () => {
+  const r = makeRun({ date: '2026-10-20T18:30', distanceKm: '3.256', durationSec: 1100.4, kneeDuring: '2', avgHr: '' }, 'manual', () => 'id1');
+  assert.deepStrictEqual([r.id, r.distanceKm, r.durationSec, r.kneeDuring, r.avgHr, r.surface, r.source],
+    ['id1', 3.26, 1100, 2, null, 'draußen', 'manual']);
+  assert.strictEqual(findByExternalId([{ externalId: 'g1' }], 'g1').externalId, 'g1');
+  assert.strictEqual(findByExternalId([{ externalId: 'g1' }], null), null);
 });
 
 test('Import lehnt kaputte Dateien ab', () => {
