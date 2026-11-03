@@ -8,7 +8,7 @@ import {
   parseDuration, isDeloadWeek, weekKey, morningCheckDue,
 } from '../js/run.js';
 import {
-  epley, regionOf, exerciseSeries, regionSeries, recentTrend, suggestStartWeight,
+  epley, median, regionOf, exerciseSeries, regionSeries, recentTrend, suggestStartWeight,
 } from '../js/stats.js';
 import {
   sortExercises, suggestNext, exerciseSequence, lastSet, prefill, stepWeight, historyStep, resolveStep,
@@ -364,107 +364,139 @@ test('Sprüche: fest pro Training, aus der Liste', () => {
   assert.strictEqual(sourceLabel({ source: 'Longstreet (1971)' }), 'Longstreet (1971)');
 });
 
-// ---------- Statistik / Gym-Vergleich (SPEC §4b, §5) ----------
+// ---------- Statistik / Gym-Vergleich (SPEC §4b, §5, Expert Review P1) ----------
 {
-  // Szenario wie im echten Verlauf: Berlin (Stufe 130) und ein Reise-Gym (Stufe 7).
-  const ss = [
-    { id: 'b1', date: '2026-09-01', gymId: 'home', startedAt: 1 },
-    { id: 'b2', date: '2026-09-15', gymId: 'home', startedAt: 2 },
-    { id: 'r1', date: '2026-10-01', gymId: 'trip', startedAt: 3 },
-    { id: 'b3', date: '2026-10-10', gymId: 'home', startedAt: 4 },
-    { id: 'r2', date: '2026-10-12', gymId: 'trip', startedAt: 5 },
-  ];
-  const st = [
-    set('b1', 'chest', 1, 100, 'stufe', 10), set('b1', 'chest', 2, 100, 'stufe', 8),
-    set('b2', 'chest', 1, 120, 'stufe', 10),
-    set('r1', 'chest', 1, 7, 'stufe', 10),
-    set('b3', 'chest', 1, 130, 'stufe', 10), set('b3', 'chest', 2, null, null, 12),
-    set('r2', 'chest', 1, 8, 'stufe', 10),
-    set('b1', 'curl', 1, null, null, 12),
-    set('b2', 'row', 1, 9, 'stufe', 10), set('b3', 'row', 1, 11, 'stufe', 10),
-  ];
-  const chest = { id: 'chest', muscleGroup: 'chest' };
-  const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, a + ' ≠ ' + b);
+  const close = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, a + ' ≠ ' + b);
+  const sess = (id, date, gymId) => ({ id, date, gymId, startedAt: Date.parse(date) });
+  const X = { id: 'x', muscleGroup: 'chest' };
 
-  test('Epley und Regionen', () => {
+  test('Epley, Median und Regionen (Nacken → Rücken)', () => {
     close(epley(100, 30), 200);
+    assert.strictEqual(median([3, 1, 2]), 2);
+    assert.strictEqual(median([4, 1, 2, 3]), 2.5);
     assert.strictEqual(regionOf('lats'), 'Rücken');
-    assert.strictEqual(regionOf('biceps'), 'Arme');
+    assert.strictEqual(regionOf('neck'), 'Rücken');
+    assert.strictEqual(regionOf('abdominals'), 'Rumpf');
     assert.strictEqual(regionOf('xyz'), null);
   });
 
-  test('Serie: Bezugsgerät Home, Prozent ggü. erstem Training', () => {
-    const s = exerciseSeries(chest, 'home', ss, st);
-    assert.strictEqual(s.ref, 'home|stufe');
-    assert.deepStrictEqual(s.points.map((p) => p.date), ['2026-09-01', '2026-09-15', '2026-10-01', '2026-10-10', '2026-10-12']);
-    close(s.points[1].pct, 20);
-    close(s.points[3].pct, 30);
-    assert.strictEqual(s.points[0].estimated, false);
+  // T2: Home 100×10, 110×10, 110×11 · Reise 7×15, 8×12, 8×13
+  const home = [sess('h1', '2026-09-01', 'home'), sess('h2', '2026-09-15', 'home'), sess('h3', '2026-09-25', 'home')];
+  const trip = [sess('t1', '2026-10-01', 'trip'), sess('t2', '2026-10-05', 'trip'), sess('t3', '2026-10-08', 'trip')];
+  const T2sets = [
+    set('h1', 'x', 1, 100, 'stufe', 10), set('h2', 'x', 1, 110, 'stufe', 10), set('h3', 'x', 1, 110, 'stufe', 11),
+    set('t1', 'x', 1, 7, 'stufe', 15), set('t2', 'x', 1, 8, 'stufe', 12), set('t3', 'x', 1, 8, 'stufe', 13),
+  ];
+
+  test('Review T2 (V2): Faktor aus Median, vorläufig bis 3 Trainings, dann eingefroren', () => {
+    const f = (n) => exerciseSeries(X, 'home', home.concat(trip.slice(0, n)), T2sets).factors.get('trip|stufe');
+    close(f(1).factor, 146.6667 / 10.5, 1e-3);
+    assert.strictEqual(f(1).source, 'vorläufig');
+    close(f(2).factor, 146.6667 / 10.85, 1e-3); // 13,52
+    close(f(3).factor, 146.6667 / 11.2, 1e-3); // 13,10
+    assert.strictEqual(f(3).source, 'geschätzt');
+    const s = exerciseSeries(X, 'home', home.concat(trip), T2sets);
+    assert.deepStrictEqual(s.points.filter((p) => p.gymId === 'trip').map((p) => p.provisional), [false, false, false]);
+    assert.strictEqual(exerciseSeries(X, 'home', home.concat(trip.slice(0, 2)), T2sets).points.slice(-1)[0].provisional, true);
   });
 
-  test('Serie: fremdes Gym per geschätztem Faktor (so stark wie zuletzt zuhause)', () => {
-    const s = exerciseSeries(chest, 'home', ss, st);
-    const f = s.factors.get('trip|stufe');
-    assert.strictEqual(f.source, 'geschätzt');
-    assert.strictEqual(f.anchorDate, '2026-09-15');
-    close(f.factor, 120 / 7);
-    close(s.points[2].pct, 20); // erstes Reise-Training = Stand vom 15.9.
-    close(s.points[4].pct, (8 / 7) * 120 - 100); // Stufe 8 dort ≈ 137 zuhause
-    assert.strictEqual(s.points[4].estimated, true);
+  test('Review T3 (V3): Basis = Median der ersten 3 Trainings (innerhalb 21 Tagen)', () => {
+    const ss = [sess('a1', '2026-09-01', 'home'), sess('a2', '2026-09-08', 'home'), sess('a3', '2026-09-15', 'home'), sess('a4', '2026-09-22', 'home')];
+    const st = [set('a1', 'x', 1, 100, 'kg', 10), set('a2', 'x', 1, 110, 'kg', 10), set('a3', 'x', 1, 110, 'kg', 11), set('a4', 'x', 1, 120, 'kg', 9)];
+    const s = exerciseSeries(X, 'home', ss, st);
+    assert.deepStrictEqual(s.points.map((p) => Math.round(p.pct * 10) / 10), [-9.1, 0, 2.5, 6.4]);
+    assert.strictEqual(s.establishedDate, '2026-09-15');
+    // F4: nur 2 Trainings → Basis erst nach 21 Tagen (Median der beiden), vorher keine Prozentkurve
+    const two = exerciseSeries(X, 'home', ss.slice(0, 2), st, [], { today: '2026-09-10' });
+    assert.deepStrictEqual([two.baseReady, two.points[0].pct], [false, null]);
+    const later = exerciseSeries(X, 'home', ss.slice(0, 2), st, [], { today: '2026-09-25' });
+    assert.strictEqual(later.baseReady, true);
+    close(later.base, (133.3333 + 146.6667) / 2, 1e-3);
+    assert.strictEqual(later.establishedDate, '2026-09-22');
   });
 
-  test('Serie: Faktor von Hand bzw. über kg pro Stufe', () => {
-    const manual = exerciseSeries(chest, 'home', ss, st, [{ id: 'chest|trip|stufe', factorToHome: 15 }]);
-    assert.deepStrictEqual(manual.factors.get('trip|stufe'), { factor: 15, source: 'manuell' });
-    close(manual.points[2].pct, 5); // 7 × 15 = 105 ggü. 100
-    // Stufe 7 bleibt "geschätzt" (Index-Stufe), erst kg pro Stufe macht es exakt.
-    assert.strictEqual(manual.points[2].estimated, true);
-    const kg = exerciseSeries(chest, 'home', ss, st, [
-      { id: 'chest|trip|stufe', kgPerUnit: 10 }, { id: 'chest|home|stufe', kgPerUnit: 0.5 }]);
-    assert.strictEqual(kg.factors.get('trip|stufe').factor, 20);
+  test('Review T4 (V4): über 15 Reps → Punkt geschätzt, kein Cap', () => {
+    const ss = [sess('a1', '2026-09-01', 'home'), sess('a2', '2026-09-03', 'home'), sess('a3', '2026-09-05', 'home')];
+    const st = [set('a1', 'x', 1, 50, 'kg', 20), set('a2', 'x', 1, 55, 'kg', 15), set('a3', 'x', 1, 60, 'kg', 12)];
+    const s = exerciseSeries(X, 'home', ss, st);
+    assert.deepStrictEqual(s.points.map((p) => Math.round(p.raw * 10) / 10), [83.3, 82.5, 84]);
+    assert.deepStrictEqual(s.points.map((p) => p.estimated), [true, false, false]);
   });
 
-  test('Serie: ohne Gewicht keine Punkte; Index-Stufen geschätzt', () => {
-    assert.strictEqual(exerciseSeries({ id: 'curl' }, 'home', ss, st).points.length, 0);
-    const row = exerciseSeries({ id: 'row' }, 'home', ss, st);
-    assert.deepStrictEqual(row.points.map((p) => p.estimated), [true, true]);
-    close(row.points[1].pct, (11 / 9 - 1) * 100);
-  });
-
-  test('Serie: ohne Home-Training ist das häufigste Gerät der Bezug', () => {
-    assert.strictEqual(exerciseSeries(chest, 'nirgends', ss, st).ref, 'home|stufe');
-    const only = exerciseSeries(chest, 'home', ss.filter((x) => x.gymId === 'trip'), st);
-    assert.strictEqual(only.ref, 'trip|stufe');
-  });
-
-  test('Regionen: Mittelwert mit letztem bekannten Stand', () => {
-    const a = { exerciseId: 'a', points: [{ date: '2026-01-01', pct: 0, sessionId: 's1' }, { date: '2026-01-10', pct: 20, sessionId: 's3' }] };
-    const b = { exerciseId: 'b', points: [{ date: '2026-01-05', pct: 0, sessionId: 's2', estimated: true }, { date: '2026-01-10', pct: 10, sessionId: 's3' }] };
-    const c = { exerciseId: 'c', points: [{ date: '2026-01-05', pct: 4, sessionId: 's2' }] };
-    const r = regionSeries([a, b, c], [{ id: 'a', muscleGroup: 'chest' }, { id: 'b', muscleGroup: 'chest' }, { id: 'c', muscleGroup: 'biceps' }]);
-    assert.deepStrictEqual(Object.keys(r), ['Brust', 'Arme']);
-    assert.deepStrictEqual(r.Brust.map((p) => [p.date, p.pct, !!p.estimated]),
-      [['2026-01-01', 0, false], ['2026-01-05', 0, true], ['2026-01-10', 15, false]]);
-    assert.deepStrictEqual(r.Brust[2].sessionIds, ['s3']);
-    assert.deepStrictEqual(r.Arme.map((p) => p.pct), [4]);
-  });
-
-  test('Trend der letzten 4 Wochen', () => {
-    const s = exerciseSeries(chest, 'home', ss, st);
-    const t = recentTrend(s, '2026-10-20');
-    assert.strictEqual(t.count, 3);
+  test('Review T5 (V6): Trend als Theil-Sen-Steigung, ±3 %', () => {
+    const mk = (vals) => ({ points: vals.map(([d, v]) => ({ date: d, value: v })) });
+    const pts = [['2026-10-01', 140], ['2026-10-08', 142], ['2026-10-15', 160], ['2026-10-22', 145], ['2026-10-29', 147]];
+    const t = recentTrend(mk(pts), '2026-10-29');
+    close(t.change, 0.244048 * 28 / 145 * 100, 1e-2); // +4,7 % (Review-Text: 4,8 % – dort Rechenfehler)
     assert.strictEqual(t.result, 1);
-    assert.strictEqual(recentTrend(s, '2026-12-31'), null);
-    const flat = { points: [{ date: '2026-10-01', value: 100 }, { date: '2026-10-10', value: 100.5 }] };
-    assert.strictEqual(recentTrend(flat, '2026-10-20').result, 0);
+    const outlier = recentTrend(mk(pts.map(([d, v], i) => [d, i === 2 ? 200 : v])), '2026-10-29');
+    assert.strictEqual(outlier.result, 1);
+    assert.ok(outlier.change < 10);
+    const two = recentTrend(mk([['2026-10-20', 100], ['2026-10-27', 102]]), '2026-10-29');
+    assert.deepStrictEqual([two.result, two.twoOnly], [0, true]); // +2 % < 3 %
   });
 
-  test('Startgewicht aus Umrechnung nur ohne eigene Historie', () => {
-    const cals = [{ id: 'chest|neu|stufe', factorToHome: 13 }];
-    const s = exerciseSeries(chest, 'home', ss, st, cals);
-    assert.strictEqual(suggestStartWeight(s, 'neu', 'stufe', cals, 'chest'), 10);
-    assert.strictEqual(suggestStartWeight(s, 'neu', 'kg', cals, 'chest'), null);
-    assert.strictEqual(suggestStartWeight(s, 'trip', 'stufe', [{ id: 'chest|trip|stufe', factorToHome: 13 }], 'chest'), null);
+  test('Serie: Faktor von Hand; kg pro Stufe rechnet in kg', () => {
+    const manual = exerciseSeries(X, 'home', home.concat(trip), T2sets, [{ id: 'x|trip|stufe', factorToHome: 15 }]);
+    assert.deepStrictEqual(manual.factors.get('trip|stufe'), { factor: 15, source: 'manuell' });
+    const kg = exerciseSeries(X, 'home', home.concat(trip), T2sets, [
+      { id: 'x|trip|stufe', kgPerUnit: 10 }, { id: 'x|home|stufe', kgPerUnit: 0.5 }]);
+    assert.deepStrictEqual(kg.factors.get('trip|stufe'), { factor: 1, source: 'kg' });
+    close(kg.points[3].value, 70 * 1.5); // 7 Stufen × 10 kg, 15 Reps
+  });
+
+  test('Review T10 (V12): Grundgewicht macht Index-Stufen exakt', () => {
+    const ss = [sess('a1', '2026-09-01', 'home'), sess('a2', '2026-09-08', 'home')];
+    const st = [set('a1', 'row', 1, 9, 'stufe', 12), set('a2', 'row', 1, 11, 'stufe', 12)];
+    const ratio = (cals) => {
+      const s = exerciseSeries({ id: 'row' }, 'home', ss, st, cals);
+      return [Math.round((s.points[1].raw / s.points[0].raw - 1) * 1000) / 10, s.points[1].index];
+    };
+    assert.deepStrictEqual(ratio([]), [22.2, true]);
+    assert.deepStrictEqual(ratio([{ id: 'row|home|stufe', kgPerUnit: 5, baseKg: 10 }]), [18.2, false]);
+    assert.deepStrictEqual(ratio([{ id: 'row|home|stufe', kgPerUnit: 5 }]), [22.2, true]); // ohne Grundgewicht bleibt markiert (F7)
+  });
+
+  test('Review T12 (S11) und S12: Einheiten-Gleichstand, gespeichertes Bezugsgerät', () => {
+    const ss = [sess('a1', '2026-09-01', 'home')];
+    const st = [set('a1', 'x', 1, 50, 'kg', 10), set('a1', 'x', 2, 50, 'kg', 10), set('a1', 'x', 3, 9, 'stufe', 10), set('a1', 'x', 4, 9, 'stufe', 10)];
+    assert.strictEqual(exerciseSeries(X, 'home', ss, st, [], { refMachine: 'home|stufe' }).points[0].unit, 'stufe');
+    assert.strictEqual(exerciseSeries(X, 'home', ss, st).points[0].unit, 'kg'); // höchstes e1RM
+    assert.strictEqual(exerciseSeries(X, 'home', home.concat(trip), T2sets).ref, 'home|stufe');
+    assert.strictEqual(exerciseSeries(X, 'home', home.concat(trip), T2sets, [], { refMachine: 'trip|stufe' }).ref, 'trip|stufe');
+  });
+
+  test('Serie: ohne Gewicht keine Punkte', () => {
+    assert.strictEqual(exerciseSeries({ id: 'leer' }, 'home', home, [set('h1', 'leer', 1, null, null, 12)]).points.length, 0);
+  });
+
+  test('Review T11 (V5): Region ohne verfallene und noch nicht eingetretene Übungen', () => {
+    const pt = (date, pct) => ({ date, pct, value: 100 + (pct || 0), sessionId: date });
+    const press = { exerciseId: 'press', baseReady: true, establishedDate: '2026-08-01', points: [pt('2026-07-20', 0), pt('2026-08-01', 5), pt('2026-10-30', 17)] };
+    const fly = { exerciseId: 'fly', baseReady: true, establishedDate: '2026-08-10', points: [pt('2026-07-25', 0), pt('2026-08-10', 3), pt('2026-08-31', 7)] };
+    const cable = { exerciseId: 'cable', baseReady: false, establishedDate: null, points: [pt('2026-10-20', null), pt('2026-10-30', null)] };
+    const r = regionSeries([press, fly, cable], [{ id: 'press', muscleGroup: 'chest' }, { id: 'fly', muscleGroup: 'chest' }, { id: 'cable', muscleGroup: 'chest' }]);
+    const last = r.Brust.slice(-1)[0];
+    assert.strictEqual(last.date, '2026-10-30');
+    assert.strictEqual(last.pct, 17);
+    assert.deepStrictEqual(last.excluded.map((e) => e.exerciseId + ':' + e.why).sort(), ['cable:neu', 'fly:pause']);
+    assert.strictEqual(r.Brust.find((p) => p.date === '2026-08-31').pct, 6); // (5 + 7) / 2
+  });
+
+  test('Region: Index-Stufen-Übung zählt nicht', () => {
+    const pt = (date, pct) => ({ date, pct, value: 100, sessionId: date, index: true });
+    const row = { exerciseId: 'row', baseReady: true, establishedDate: '2026-09-01', points: [pt('2026-09-01', 0), pt('2026-09-10', 22)] };
+    assert.deepStrictEqual(regionSeries([row], [{ id: 'row', muscleGroup: 'middle back' }]), {});
+  });
+
+  test('Review T8 (V9): Startgewicht über Ziel-Reps, auf Schrittweite gerundet', () => {
+    const ss = [sess('a1', '2026-09-01', 'home')];
+    const st = [set('a1', 'x', 1, 70, 'kg', 12)];
+    const cals = [{ id: 'x|neu|kg', factorToHome: 2 }];
+    const s = exerciseSeries(X, 'home', ss, st, cals);
+    assert.deepStrictEqual(suggestStartWeight(s, 'neu', 'kg', cals, 'x', { reps: 8, step: 2.5 }), { weight: 37.5, reps: 8 });
+    assert.strictEqual(suggestStartWeight(s, 'neu', 'stufe', cals, 'x'), null); // kein Faktor für Stufe
+    assert.strictEqual(suggestStartWeight(s, 'home', 'kg', [{ id: 'x|home|kg', factorToHome: 2 }], 'x'), null); // hat schon Historie
   });
 }
 
