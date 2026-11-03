@@ -35,7 +35,8 @@ function monthTicks(t0, t1) {
   return out.filter((_, i) => i % every === 0);
 }
 
-export function lineChart(series, { height = 200, unit = '%', zero = true, directLabels = true } = {}) {
+// goal = { y, label }: gestrichelte Ziellinie (z. B. 10 km) · fmt = eigene Beschriftung der y-Achse
+export function lineChart(series, { height = 200, unit = '%', zero = true, directLabels = true, goal = null, fmt: yFmt = null } = {}) {
   const pts = series.flatMap((s) => s.points);
   if (!pts.length) return '<div class="empty small">Noch keine Daten mit Gewicht.</div>';
   const H = height;
@@ -43,19 +44,23 @@ export function lineChart(series, { height = 200, unit = '%', zero = true, direc
   let t0 = Math.min(...pts.map((p) => p.t));
   let t1 = Math.max(...pts.map((p) => p.t));
   if (t0 === t1) { t0 -= 7 * 864e5; t1 += 7 * 864e5; }
-  const ys = pts.map((p) => p.y);
+  const ys = pts.map((p) => p.y).concat(goal ? [goal.y] : []);
   const ticks = niceTicks(Math.min(...ys, zero ? 0 : Infinity), Math.max(...ys, zero ? 0 : -Infinity));
   const y0 = ticks[0];
   const y1 = ticks[ticks.length - 1];
   const x = (t) => PAD.left + ((t - t0) / (t1 - t0)) * (W - PAD.left - right);
   const y = (v) => PAD.top + (1 - (v - y0) / (y1 - y0)) * (H - PAD.top - PAD.bottom);
-  const fmt = (v) => (unit === '%' && v > 0 ? '+' : '') + String(Math.round(v * 10) / 10).replace('.', ',') + (unit === '%' ? ' %' : '');
+  const fmt = yFmt || ((v) => (unit === '%' && v > 0 ? '+' : '') + String(Math.round(v * 10) / 10).replace('.', ',') + (unit === '%' ? ' %' : ''));
 
   let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(series.map((s) => s.label).join(', '))}">`;
   ticks.forEach((v) => {
     svg += `<line class="grid${v === 0 && zero ? ' zero' : ''}" x1="${PAD.left}" x2="${W - right}" y1="${y(v)}" y2="${y(v)}"/>`;
     svg += `<text class="axis" x="${PAD.left - 6}" y="${y(v) + 4}" text-anchor="end">${esc(fmt(v))}</text>`;
   });
+  if (goal) {
+    svg += `<line class="goal" x1="${PAD.left}" x2="${W - right}" y1="${y(goal.y)}" y2="${y(goal.y)}"/>`;
+    svg += `<text class="dlabel" x="${W - right - 4}" y="${y(goal.y) - 6}" text-anchor="end">${esc(goal.label)}</text>`;
+  }
   monthTicks(t0, t1).forEach((m) => {
     svg += `<text class="axis" x="${x(m.t)}" y="${H - 6}" text-anchor="middle">${m.label}</text>`;
   });

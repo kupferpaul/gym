@@ -1,6 +1,6 @@
 # Gym Progress Tracker – Projektregeln
 
-Spezifikation: SPEC.md (Quelle der Wahrheit). Aktuelle Phase: 3 (Graphen + Gym-Vergleich).
+Spezifikation: SPEC.md (Quelle der Wahrheit). Aktuelle Phase: Lauf-Funktion Phase 1 (Brief in private/; Garmin = Phase 2, Coach = Phase 3, nicht bauen).
 
 ## Stack
 Reines HTML/CSS/Vanilla-JS (ES-Module), kein Build-Schritt, kein Framework, kein Backend.
@@ -13,6 +13,8 @@ IndexedDB über `js/db.js`, Offline über `sw.js`. Deploy: GitHub Pages (`kupfer
 - `js/progress.js` – pure Funktionen (Vergleich §4, Rückmeldung, Steigerungs-Hinweis, Timer)
 - `js/stats.js` – pure Funktionen (Epley, Zusammenführung über Gyms, Faktoren, Regionen, 4-Wochen-Trend)
 - `js/chart.js` – SVG-Liniendiagramm ohne Bibliothek; Farben `--s1..--s8` in style.css (feste Reihenfolge, geprüft)
+- `js/run.js` – pure Funktionen Lauf (L30, Soll, Ampel, Entlastung, Morgen-Check); rote Läufe zählen nicht für L30
+- `js/sources.js` – Datenquellen für Läufe (aktuell nur manuell; Garmin später daneben, Abgleich über externalId)
 - `tools/notes.mjs` – Parser für die alte Notiz (§8), `tools/import-notes.mjs` – CLI dazu
 - `private/` – gitignored: Notiz, Zuordnung, erzeugte Import-Datei (persönliche Daten)
 - `data/exercises.json` – reduzierte free-exercise-db (Public Domain)
@@ -39,7 +41,8 @@ IndexedDB über `js/db.js`, Offline über `sw.js`. Deploy: GitHub Pages (`kupfer
 
 ## Regeln
 - Nur Features der aktuellen Phase bauen, nichts aus späteren Phasen vorziehen.
-- DB-Version 2 (Store `calibrations`), Backup-Format v2 (v1 bleibt importierbar).
+- DB-Version 3 (Stores `calibrations`, `runs`), Backup-Format v3 (v1/v2 bleiben importierbar).
+- Keine Garmin-, Worker- oder Claude-API-Keys im Repo oder in der App (nur später im Worker).
 - Daten auf dem iPhone müssen jedes Update überleben: IndexedDB nur über `onupgradeneeded`
   mit `oldVersion`-Prüfung ändern, nie Stores löschen oder neu anlegen.
 - Bei jeder Änderung an ausgelieferten Dateien `CACHE_VERSION` in `sw.js` erhöhen; neue Dateien in `FILES` eintragen.

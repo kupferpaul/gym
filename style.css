@@ -216,6 +216,28 @@ dialog h3 { margin: 4px 0 16px; font-size: 20px; }
   background: var(--text); color: var(--bg); padding: 12px 16px; border-radius: var(--r-btn); z-index: 10; font-size: 16px; font-weight: 600;
 }
 
+/* Lauf */
+.card { background: var(--surface); border-radius: var(--r-card); padding: 16px; margin-bottom: 8px; }
+.card .title { font-weight: 600; margin: 4px 0; }
+.card .sub { color: var(--muted); font-size: 15px; }
+.card .seg { background: var(--bg); margin: 12px 0 4px; }
+.card .seg button { min-height: 48px; }
+.runhero .big, .ampel .big { font-size: 40px; font-weight: 700; margin: 4px 0 8px; }
+.prog { height: 10px; border-radius: 999px; background: var(--bg); margin: 12px 0 8px; overflow: hidden; }
+.prog span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.knee { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.knee button { min-height: var(--tap); font-size: 22px; font-weight: 700; padding: 0; }
+.knee button.on, .seg button.on { background: var(--text); color: var(--bg); }
+.dur { display: flex; align-items: center; gap: 8px; }
+.dur input {
+  width: 88px; font: inherit; font-size: 28px; font-weight: 700; text-align: center; padding: 8px;
+  border: 0; border-radius: var(--r-btn); background: var(--surface); color: var(--text); min-height: var(--tap);
+}
+.dur > span:not(.sub) { font-size: 28px; font-weight: 700; }
+.dur .sub { color: var(--muted); font-size: 15px; margin-left: 8px; }
+button.more { width: 100%; margin-top: 16px; color: var(--muted); }
+.chart .goal { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 6 4; }
+
 /* Status zuletzt, damit es Grundfarben (z. B. Geisterwert in Stein) überschreibt:
    besser ▲ Messing, gleich ▬ Stein, schlechter ▼ Rost – nie nur Farbe, immer mit Pfeil. */
 .r1 { color: var(--accent); }
