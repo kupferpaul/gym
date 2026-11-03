@@ -147,17 +147,32 @@ export function stepSize(unit, settings = DEFAULT_SETTINGS) {
 
 // Schrittweite aus dem Verlauf: kleinster Abstand zwischen bisher genutzten Gewichten
 // dieser Übung in diesem Gym und dieser Einheit (z. B. 110/130 → 20, 9/10/11 → 1).
+// Expert Review V7: häufigster Sprung zwischen aufeinanderfolgenden Trainings statt kleinstem Abstand,
+// damit ein einzelner Tippfehler (100 → 101) die Schrittweite nicht dauerhaft auf 1 setzt.
+// kg: auf übliche Schritte gerundet (über 10 kg auf 2,5er-Raster); Stufen: auf 0,5 (beschriftete Stacks wie 62,5 → 75).
+const KG_STEPS = [0.5, 1, 1.25, 2, 2.5, 5, 10];
+function roundStep(d, unit) {
+  if (unit === 'stufe') return Math.max(0.5, Math.round(d * 2) / 2);
+  if (d > 10) return Math.round(d / 2.5) * 2.5;
+  return KG_STEPS.reduce((best, c) => (Math.abs(c - d) < Math.abs(best - d) ? c : best));
+}
+
 export function historyStep(exerciseId, gymId, unit, sessions, sets) {
   if (!unit) return null;
-  const gymSessions = new Set(sessions.filter((s) => s.gymId === gymId).map((s) => s.id));
-  const weights = [...new Set(sets
-    .filter((s) => s.exerciseId === exerciseId && s.unit === unit && s.weight != null && gymSessions.has(s.sessionId))
-    .map((s) => s.weight))].sort((a, b) => a - b);
-  let best = null;
-  for (let i = 1; i < weights.length; i++) {
-    const d = Math.round((weights[i] - weights[i - 1]) * 100) / 100;
-    if (d > 0 && (best === null || d < best)) best = d;
+  const tops = sortSessions(sessions.filter((s) => s.gymId === gymId)).map((session) => {
+    const w = sets.filter((s) => s.sessionId === session.id && s.exerciseId === exerciseId && s.unit === unit && s.weight != null)
+      .map((s) => s.weight);
+    return w.length ? Math.max(...w) : null;
+  }).filter((w) => w != null);
+  const counts = new Map();
+  for (let i = 1; i < tops.length; i++) {
+    const d = Math.abs(Math.round((tops[i] - tops[i - 1]) * 100) / 100);
+    if (d > 0) { const r = roundStep(d, unit); counts.set(r, (counts.get(r) || 0) + 1); }
   }
+  let best = null;
+  counts.forEach((n, step) => {
+    if (best === null || n > counts.get(best) || (n === counts.get(best) && step < best)) best = step;
+  });
   return best;
 }
 

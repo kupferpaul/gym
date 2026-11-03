@@ -120,7 +120,16 @@ test('Gewichtsschritte: nie unter 0, ohne Rundungsfehler', () => {
   assert.strictEqual(stepWeight(5, null, 1, 1), null);
 });
 
-test('Schrittweite aus Verlauf: kleinster Abstand, pro Gym und Einheit', () => {
+test('Review T6 (V7): Schrittweite = häufigster Sprung, Tippfehler stört nicht', () => {
+  const days = ['2026-01-01', '2026-01-02', '2026-01-03', '2026-01-04', '2026-01-05', '2026-01-06', '2026-01-07'];
+  const ss = days.map((d, i) => ({ id: 'd' + i, date: d, gymId: 'g', startedAt: i }));
+  const st = [100, 100, 101, 102.5, 105, 105, 107.5].map((w, i) => set('d' + i, 'p', 1, w, 'kg', 8));
+  assert.strictEqual(historyStep('p', 'g', 'kg', ss, st), 2.5); // alt: 1
+  const stufe = [62.5, 75, 75, 87.5].map((w, i) => set('d' + i, 'q', 1, w, 'stufe', 8));
+  assert.strictEqual(historyStep('q', 'g', 'stufe', ss, stufe), 12.5);
+});
+
+test('Schrittweite aus Verlauf: pro Gym und Einheit', () => {
   const st = [
     set('s1', 'chest', 1, 110, 'stufe', 10), set('s1', 'chest', 2, 130, 'stufe', 8),
     set('s2', 'chest', 1, 150, 'stufe', 8), set('s2', 'chest', 2, 130, 'stufe', 8),
