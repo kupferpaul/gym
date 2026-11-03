@@ -26,30 +26,48 @@ function topWeight(list) {
 
 const totalReps = (list) => list.reduce((n, s) => n + s.reps, 0);
 
-// Arbeitssätze = Sätze mit dem Höchstgewicht. Leichtere Sätze davor (Herantasten, Aufwärmen)
-// zählen nicht. Ohne vergleichbares Gewicht sind alle Sätze Arbeitssätze.
-export function workingSets(list) {
+// Arbeitssätze = Sätze mit mindestens 90 % des Höchstgewichts (Expert Review V8): Herantasten und
+// Aufwärmen zählen nicht, Backoff-Sätze knapp darunter schon. Ohne vergleichbares Gewicht: alle Sätze.
+export const WORKING_BAND = 0.9;
+export function isWorkingSet(set, list) {
   const top = topWeight(list);
-  return top ? list.filter((s) => s.weight === top.weight) : list;
+  return !top || set.weight >= top.weight * WORKING_BAND - 1e-9;
+}
+export function workingSets(list) {
+  return list.filter((s) => isWorkingSet(s, list));
 }
 
-// Ergebnis: { result: 1 | 0 | -1, repsOnly, weightDiff, repsDiff, unit }
-export function compareSets(prev, cur) {
+// Untere Rep-Grenze der doppelten Progression (Standard 8, einstellbar).
+export const DEFAULT_LOWER_REPS = 8;
+
+// Ergebnis: { result: 1 | 0 | -1, repsOnly, weightDiff, repsDiff, unit, building }
+// V1: Mehr Gewicht ist nur ▲, wenn die Gesamt-Reps der Arbeitssätze mindestens
+// max(60 % der Reps vom letzten Mal, Arbeitssätze × untere Rep-Grenze) erreichen; sonst ▬ "Reps im Aufbau".
+// Mehr Gewicht ergibt nie ▼.
+export function compareSets(prev, cur, lowerReps = DEFAULT_LOWER_REPS) {
   const pw = topWeight(prev);
   const cw = topWeight(cur);
   if (pw && cw && pw.unit === cw.unit) {
     const weightDiff = Math.round((cw.weight - pw.weight) * 100) / 100;
-    const repsDiff = totalReps(workingSets(cur)) - totalReps(workingSets(prev));
-    const result = weightDiff !== 0 ? sign(weightDiff) : sign(repsDiff);
-    return { result, repsOnly: false, weightDiff, repsDiff, unit: cw.unit };
+    const curWork = workingSets(cur);
+    const prevReps = totalReps(workingSets(prev));
+    const curReps = totalReps(curWork);
+    const repsDiff = curReps - prevReps;
+    if (weightDiff > 0) {
+      const threshold = Math.max(0.6 * prevReps, curWork.length * lowerReps);
+      const ok = curReps >= threshold - 1e-9;
+      return { result: ok ? 1 : 0, repsOnly: false, weightDiff, repsDiff, unit: cw.unit, building: !ok };
+    }
+    const result = weightDiff < 0 ? -1 : sign(repsDiff);
+    return { result, repsOnly: false, weightDiff, repsDiff, unit: cw.unit, building: false };
   }
   const repsDiff = totalReps(cur) - totalReps(prev);
-  return { result: sign(repsDiff), repsOnly: true, weightDiff: 0, repsDiff, unit: null };
+  return { result: sign(repsDiff), repsOnly: true, weightDiff: 0, repsDiff, unit: null, building: false };
 }
 
 // Einzelner Satz gegen den Satz gleicher Nummer vom letzten Mal → 1 | 0 | -1
-export function compareSet(prev, cur) {
-  return compareSets([prev], [cur]).result;
+export function compareSet(prev, cur, lowerReps = DEFAULT_LOWER_REPS) {
+  return compareSets([prev], [cur], lowerReps).result;
 }
 
 // Status-Pfeile nach BRAND.md: besser ▲, gleich ▬, schlechter ▼ (Farbe kommt per CSS-Klasse r1/r0/r-1).
@@ -71,7 +89,8 @@ export function feedbackText(cmp, prevDate) {
   if (cmp.weightDiff > 0) {
     const step = cmp.unit === 'stufe' ? '+' + String(cmp.weightDiff).replace('.', ',') + ' Stufe'
       : '+' + String(cmp.weightDiff).replace('.', ',') + ' kg';
-    return 'Gewicht erhöht (' + step + ')' + (cmp.repsDiff >= 0 ? ', Reps gehalten' : '') + since;
+    const tail = cmp.building ? ', Reps im Aufbau' : cmp.repsDiff >= 0 ? ', Reps gehalten' : '';
+    return 'Gewicht erhöht (' + step + ')' + tail + since;
   }
   if (cmp.weightDiff < 0) return 'Weniger Gewicht als' + since.replace(' ggü.', '');
   if (cmp.repsDiff === 0) return 'Gleich wie ' + shortDate(prevDate);
@@ -96,7 +115,7 @@ export function ghostText(prev, n) {
 
 // Zusammenfassung nach "Training abschließen": pro Übung Vergleich mit dem letzten Mal im selben Gym.
 // Dauer = erster bis letzter Satz (vergessenes Abschließen verfälscht sie so nicht).
-export function sessionSummary(session, sessions, sets) {
+export function sessionSummary(session, sessions, sets, lowerReps = DEFAULT_LOWER_REPS) {
   const own = sets.filter((s) => s.sessionId === session.id).sort(bySeq);
   const order = [];
   own.forEach((s) => { if (!order.includes(s.exerciseId)) order.push(s.exerciseId); });
@@ -104,7 +123,7 @@ export function sessionSummary(session, sessions, sets) {
     const list = own.filter((s) => s.exerciseId === exerciseId);
     const before = sessions.filter((x) => x.date < session.date || (x.date === session.date && (x.startedAt || 0) < (session.startedAt || 0)));
     const prev = previousSets(exerciseId, session.gymId, before, sets, session.id);
-    return { exerciseId, sets: list, prev, cmp: prev ? compareSets(prev.sets, list) : null };
+    return { exerciseId, sets: list, prev, cmp: prev ? compareSets(prev.sets, list, lowerReps) : null };
   });
   const times = own.map((s) => s.createdAt).filter(Boolean);
   const minutes = times.length > 1 ? Math.max(1, Math.round((Math.max(...times) - Math.min(...times)) / 60000)) : null;

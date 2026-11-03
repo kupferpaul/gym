@@ -277,6 +277,27 @@ test('Vergleich: Herantast-Sätze zählen nicht (nur Sätze mit Höchstgewicht)'
   assert.strictEqual(suggestIncrease([...S(20, 'kg', 8), ...S(25, 'kg', 12, 12)], 25, 'kg'), true);
 });
 
+test('Review T1 (V1): mehr Gewicht nur ▲ mit genug Reps (60-%-Regel), nie ▼', () => {
+  const row = (p, c) => compareSets(p, c);
+  let c = row(S(100, 'kg', 12, 12, 12), S(102.5, 'kg', 6, 5, 5)); // 16 < max(21,6; 24)
+  assert.deepStrictEqual([c.result, c.building], [0, true]);
+  assert.strictEqual(feedbackText(c, '2026-10-20'), 'Gewicht erhöht (+2,5 kg), Reps im Aufbau ggü. 20.10.');
+  c = row(S(110, 'kg', 10, 10, 9), S(120, 'kg', 9, 8)); // 17 < 17,4
+  assert.strictEqual(c.result, 0);
+  c = row(S(100, 'kg', 10, 10, 10), S(105, 'kg', 8, 8, 8)); // 24 ≥ max(18; 24)
+  assert.strictEqual(c.result, 1);
+  c = row(S(105, 'kg', 6), S(100, 'kg', 10, 10, 10)); // weniger Gewicht bleibt ▼ (F2)
+  assert.strictEqual(c.result, -1);
+});
+
+test('Review T7 (V8): Arbeitssätze ab 90 % des Höchstgewichts', () => {
+  const t = [...S(60, 'kg', 12), ...S(80, 'kg', 10), ...S(100, 'kg', 10, 10), ...S(90, 'kg', 14)];
+  assert.deepStrictEqual(workingSets(t).map((s) => s.weight), [100, 100, 90]);
+  assert.strictEqual(workingSets(t).reduce((n, s) => n + s.reps, 0), 34);
+  // Goblet-Fall bleibt: 16 und 20 kg liegen unter 22,5 kg
+  assert.deepStrictEqual(workingSets([...S(16, 'kg', 20), ...S(20, 'kg', 20), ...S(25, 'kg', 20)]).map((s) => s.weight), [25]);
+});
+
 test('Vergleich: einzelner Satz', () => {
   assert.strictEqual(compareSet(S(130, 'kg', 10)[0], S(130, 'kg', 11)[0]), 1);
   assert.strictEqual(compareSet(S(130, 'kg', 10)[0], S(130, 'kg', 10)[0]), 0);
