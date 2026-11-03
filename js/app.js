@@ -297,7 +297,7 @@ const VIEWS = {
         }
         const list = todaySets.filter((s) => s.exerciseId === id);
         const prev = previousSets(id, gym.id, S.sessions, S.sets, session.id);
-        const res = prev ? compareSets(prev.sets, list).result : null;
+        const res = prev ? compareSets(prev.sets, list, settings().lowerReps).result : null;
         const arrow = prev ? `<span class="r${res}">${ARROWS[res]}</span> ` : '';
         return `<button class="row" data-a="open-ex" data-id="${id}"><div class="main">
           <div class="title">${h(ex ? ex.name : '?')}</div><div class="sub">${h(setSummary(list))}</div></div>
@@ -332,7 +332,7 @@ const VIEWS = {
   summary() {
     const session = S.sessions.find((s) => s.id === view.id);
     if (!session) { view = { name: 'home' }; return VIEWS.home(); }
-    const sum = sessionSummary(session, S.sessions, S.sets);
+    const sum = sessionSummary(session, S.sessions, S.sets, settings().lowerReps);
     const quote = pickQuote(session.id);
     const g = gymById(session.gymId);
     const sRuns = runsOf(session.id);
@@ -376,25 +376,28 @@ const VIEWS = {
     const keys = Array.from({ length: 20 }, (_, i) => `<button data-a="rep" data-n="${i + 1}">${i + 1}</button>`).join('');
     const segBtn = (u, label) => `<button data-a="unit" data-u="${u}" class="${unit === (u || null) ? 'on' : ''}">${label}</button>`;
 
-    // Geisterwert pro Satz: Reps desselben Arbeitssatzes beim letzten Mal + Pfeil
-    // (Herantast-Sätze mit weniger Gewicht zählen nicht).
+    // Geisterwert (Review V8): Index zählt nur über Arbeitssätze (≥ 90 % des Höchstgewichts).
+    // Arbeitssatz n wird mit dem n-ten Arbeitssatz vom letzten Mal verglichen; Herantast-Sätze bekommen keinen.
     const prevWork = prev ? workingSets(prev.sets) : null;
+    const curWork = workingSets(list);
     const ghost = (s) => {
-      const p = prevWork && prevWork[s.order - 1];
-      return p ? `<span class="ghost r${compareSet(p, s)}">${ARROWS[compareSet(p, s)]} (${p.reps})</span>` : '';
+      const p = prevWork && prevWork[curWork.indexOf(s)];
+      if (!p) return '';
+      const r = compareSet(p, s, st.lowerReps);
+      return `<span class="ghost r${r}">${ARROWS[r]} (${p.reps})</span>`;
     };
     let info = '';
-    if (prev && list.length >= prev.sets.length) {
-      const cmp = compareSets(prev.sets, list);
+    if (prev && curWork.length >= prevWork.length) {
+      const cmp = compareSets(prev.sets, list, st.lowerReps);
       info = `<div class="feedback r${cmp.result}">${ARROWS[cmp.result]} ${h(feedbackText(cmp, prev.session.date))}</div>`;
     } else if (!list.length && prev && suggestIncrease(prev.sets, log.weight, unit, st.increaseThreshold)) {
       info = `<div class="banner"><span>Letztes Mal alle Sätze ≥ ${st.increaseThreshold} Reps. Gewicht erhöhen?</span>
         <button class="primary" data-a="step" data-d="1">+${h(stepLabel(stepInfo().step, unit))}</button></div>`;
     } else if (!list.length && log.fromFactor) {
-      info = '<div class="feedback">Erstes Mal hier: Startgewicht aus deiner Umrechnung vorgeschlagen.</div>';
+      info = `<div class="feedback">Erstes Mal hier: Vorschlag für ca. ${log.fromFactor} Reps aus deiner Umrechnung.</div>`;
     }
     const step = unit ? fmtNum(stepInfo().step) : '';
-    const target = prev ? ghostText(prevWork, list.length + 1) : null;
+    const target = prev ? ghostText(prevWork, curWork.length + 1) : null;
     const targetText = target ? 'Ziel: ' + target : prev ? 'Extra-Satz' : 'Erstes Mal hier';
 
     return `<header class="bar">
@@ -443,19 +446,30 @@ const VIEWS = {
     out += segs('chart-mode', chartState.mode, [['regions', 'Körperregionen'], ['exercises', 'Übungen']]);
     out += `<div class="chartbox" style="margin-top:8px">${lineChart(visible, { height: 220 })}
       <div class="chart-info" id="chartInfo">Tippe auf einen Punkt für Details.</div></div>`;
+    // Bei 3/6 Monaten zusätzlich die Veränderung seit Fensterbeginn (Linie bleibt auf der Gesamtbasis).
+    const sinceStart = (l) => {
+      if (chartState.range === 'all' || l.points.length < 2) return '';
+      const a = l.points[0].y;
+      const b = l.points[l.points.length - 1].y;
+      return ' ' + fmtPct(((100 + b) / (100 + a) - 1) * 100);
+    };
     out += `<div class="legend">${lines.map((l) => `<button data-a="chart-toggle" data-id="${h(l.id)}"
-      class="${chartState.hidden.has(l.id) ? 'off' : ''}" style="--c:var(--s${l.color})"><span class="sw"></span>${h(l.label)}</button>`).join('')}</div>`;
+      class="${chartState.hidden.has(l.id) ? 'off' : ''}" style="--c:var(--s${l.color})"><span class="sw"></span>${h(l.label)}${h(sinceStart(l))}</button>`).join('')}</div>`;
     out += `<div style="margin-top:8px">${segs('chart-range', chartState.range, [['3', '3 Monate'], ['6', '6 Monate'], ['all', 'Alle']])}</div>`;
-    out += '<p class="muted small">0 % = erstes Training der Übung. Hohle Punkte sind geschätzt (anderes Gym oder Index-Stufe).</p>';
+    const noBase = all.filter((x) => x.points.length && !x.baseReady).map((x) => (exById(x.exerciseId) || {}).name);
+    out += `<p class="muted small">0 % = Median der ersten 3 Trainings einer Übung. Hohle Punkte sind geschätzt
+      (anderes Gym, Index-Stufe oder über 15 Reps), gestrichelte vorläufig.${chartState.range === 'all' ? '' : ' Zahl an der Legende: Veränderung seit Beginn des Zeitraums.'}
+      ${noBase.length ? ' Prozent ab dem 3. Training: ' + h(noBase.join(', ')) + '.' : ''}</p>`;
 
     const today = todayISO();
     out += '<h2>Übungen · letzte 4 Wochen (* geschätzt)</h2><div class="list">' + sortExercises(S.exercises, S.sets).filter((ex) => ex.kind !== 'run').map((ex) => {
       const s = all.find((x) => x.exerciseId === ex.id);
       const t = s && recentTrend(s, today);
-      const trend = t ? `<span class="trend r${t.result}">${ARROWS[t.result]} ${fmtPct(t.change)}${t.estimated ? '*' : ''}</span>`
+      const trend = t ? `<span class="trend r${t.result}">${ARROWS[t.result]} ${fmtPct(t.change)}${t.estimated ? '*' : ''}${t.twoOnly ? ' (2 Tr.)' : ''}</span>`
         : '<span class="trend none">zu wenig Daten</span>';
+      const total = !s || !s.points.length ? '' : s.baseReady ? ' · gesamt ' + fmtPct(s.points[s.points.length - 1].pct) : ' · Prozent ab 3. Training';
       return `<button class="row" data-a="open-stats" data-id="${ex.id}"><div class="main"><div class="title">${h(ex.name)}</div>
-        <div class="sub">${h(regionOf(ex.muscleGroup) || muscleLabel(ex.muscleGroup))}${s && s.points.length ? ' · gesamt ' + fmtPct(s.points[s.points.length - 1].pct) : ''}</div></div>
+        <div class="sub">${h(regionOf(ex.muscleGroup) || muscleLabel(ex.muscleGroup))}${total}</div></div>
         ${sparkline(s)}${trend}</button>`;
     }).join('') + '</div>';
     out += `<div class="list" style="margin-top:16px"><button class="row" data-a="tab" data-view="trainings"><div class="main">
@@ -486,14 +500,22 @@ const VIEWS = {
   exstats() {
     const ex = exById(view.id);
     if (!ex) { view = { name: 'sessions' }; return VIEWS.sessions(); }
-    const s = allSeries().find((x) => x.exerciseId === ex.id);
+    const s = seriesOf(ex);
     const color = colorIndex().get(ex.id) || 1;
+    const nudged = (S.meta.get('nudgeHighReps') || []).includes(ex.id);
     let out = `<header class="bar"><button class="back ghost" data-a="tab" data-view="sessions" aria-label="Zurück">‹</button>
       <div class="titles"><h1>${h(ex.name)}</h1><div class="date">${h(muscleLabel(ex.muscleGroup))}</div></div></header>`;
     if (!s.points.length) return out + '<div class="empty">Noch keine Trainings mit Gewicht.</div>';
-    const line = { id: ex.id, label: ex.name, color, points: s.points.map((p) => chartPoint(p, p.pct)) };
-    out += `<h2>Fortschritt über alle Gyms</h2><div class="chartbox">${lineChart([line], { height: 180 })}
+    // Ohne Basis (Review V3): absolute Werte in Bezugseinheiten statt Prozent.
+    const absFmt = (v) => fmtNum(Math.round(v));
+    const line = { id: ex.id, label: ex.name, color, points: s.points.map((p) => (s.baseReady ? chartPoint(p, p.pct) : chartPoint(p, p.value, absFmt))) };
+    out += `<h2>${s.baseReady ? 'Fortschritt über alle Gyms' : 'Geschätztes Maximum (Prozent ab dem 3. Training)'}</h2>
+      <div class="chartbox">${lineChart([line], s.baseReady ? { height: 180 } : { height: 180, unit: '', zero: false, fmt: absFmt })}
       <div class="chart-info" id="chartInfo">Tippe auf einen Punkt für Details.</div></div>`;
+    if (!nudged && s.points.some((p) => p.highReps)) {
+      out += `<div class="card"><div class="sub">Ein Arbeitssatz unter 12 Reps macht die Kurve genauer (über 15 Reps ist die Schätzung unsicher).</div>
+        <button class="ghost small" data-a="nudge-off" data-id="${ex.id}">Ausblenden</button></div>`;
+    }
 
     const [refGym, refUnit] = s.ref.split('|');
     const unitName = (u) => (u === 'stufe' ? 'Stufe' : 'kg');
@@ -521,12 +543,20 @@ const VIEWS = {
       } else {
         out += `<p class="muted small">${pts.length} Training${pts.length === 1 ? '' : 's'} hier – Graph ab 2 Trainings.</p>`;
       }
+      const kgText = cal && cal.kgPerUnit ? ` · 1 Stufe = ${fmtNum(cal.kgPerUnit)} kg${cal.baseKg != null ? ' + ' + fmtNum(cal.baseKg) + ' kg Grundgewicht' : ''}` : '';
+      const SRC = {
+        geschätzt: () => ` (geschätzt aus 3 Trainings, Anker ${h(formatDate(f.anchorDate))})`,
+        vorläufig: () => ` (vorläufig, ${f.newCount} von 3 Trainings)`,
+        kg: () => ' (über kg pro Stufe)',
+        manuell: () => ' (von dir)',
+      };
       const calText = f.source === 'bezug'
-        ? 'Bezugsgerät' + (cal && cal.kgPerUnit ? ` · 1 Stufe = ${fmtNum(cal.kgPerUnit)} kg` : '')
+        ? 'Bezugsgerät' + kgText
         : `1 ${unitName(unit)} hier ≈ ${fmtNum(Math.round(f.factor * 100) / 100)} ${unitName(refUnit)} in ${h((gymById(refGym) || {}).name || '?')}`
-          + (f.source === 'geschätzt' ? ` (geschätzt aus ${h(formatDate(f.anchorDate))})` : ' (von dir)');
+          + SRC[f.source]() + kgText;
       out += `<div class="list"><button class="row" data-a="edit-cal" data-gym="${gymId}" data-unit="${unit}"><div class="main cal">${calText}</div>
-        <span class="muted">Ändern</span></button></div>`;
+        <span class="muted">Ändern</span></button>
+        ${f.source !== 'bezug' && pts.length ? `<button class="row" data-a="set-ref" data-m="${machine}"><div class="main cal">Als Bezugsgerät festlegen</div></button>` : ''}</div>`;
     });
     out += `<div class="list" style="margin-top:8px"><button class="row add" data-a="add-cal">+ Umrechnung für anderes Gym (Startgewicht)</button></div>`;
     return out;
@@ -639,6 +669,7 @@ const VIEWS = {
       <h2>Standard-Schritt Stufe</h2><div class="seg">${opt('weightStepStufe', [0.5, 1, 2, 5], fmtNum)}</div>
       <h2>Pause</h2><div class="seg">${opt('restSeconds', [30, 45, 60, 90, 120, 180], formatClock)}</div>
       <h2>„Gewicht erhöhen?“ ab Reps in allen Sätzen</h2><div class="seg">${opt('increaseThreshold', [8, 10, 11, 12, 13, 15], String)}</div>
+      <h2>Untere Rep-Grenze (mehr Gewicht zählt als besser, wenn die Reps reichen)</h2><div class="seg">${opt('lowerReps', [5, 6, 8, 10], String)}</div>
       <h2>Bildschirm während Training anlassen</h2><div class="seg">${opt('wakeLock', [true, false], (v) => (v ? 'An' : 'Aus'))}</div>
       <div class="list" style="margin-top:8px"><button class="row" data-a="test-beep"><div class="main"><div class="title">Ton testen</div>
         <div class="sub">So klingt das Pausenende (Lautstärke, Lautlos-Schalter)</div></div></button></div>
@@ -710,8 +741,22 @@ const chartState = { area: 'kraft', mode: 'regions', range: 'all', hidden: new S
 const tOf = (iso) => Date.parse(iso + 'T00:00:00Z');
 const fmtPct = (v) => (v > 0 ? '+' : v < 0 ? '−' : '±') + fmtNum(Math.abs(Math.round(v))) + ' %';
 
+// Bezugsgerät pro Übung wird beim ersten Mal festgehalten (Review V10/F6): ein neues Home-Gym
+// verschiebt so keine Kurven. Umsetzen nur bewusst auf der Übungsseite.
+const refMachines = () => S.meta.get('refMachines') || {};
+function seriesOf(ex) {
+  return exerciseSeries(ex, homeGym().id, S.sessions, S.sets, S.calibrations, { refMachine: refMachines()[ex.id], today: todayISO() });
+}
 function allSeries() {
-  return S.exercises.map((ex) => exerciseSeries(ex, homeGym().id, S.sessions, S.sets, S.calibrations));
+  const all = S.exercises.map(seriesOf);
+  const stored = refMachines();
+  const missing = all.filter((s) => s.ref && !stored[s.exerciseId]);
+  if (missing.length) {
+    const next = { ...stored };
+    missing.forEach((s) => { next[s.exerciseId] = s.ref; });
+    setMeta('refMachines', next).catch(() => {});
+  }
+  return all;
 }
 
 // Farbe folgt der Übung (feste Reihenfolge nach Anlage), nie dem Rang; mehr als 8 → nicht im Gesamtbild.
@@ -723,14 +768,22 @@ function colorIndex() {
   return map;
 }
 
-function chartPoint(p, y) {
+// Geschätzte und vorläufige Punkte mit "ca." (Review V10/S14); Prozent ohne Nachkommastelle.
+function pointNote(p) {
+  if (p.provisional) return ' (vorläufig)';
+  if (p.highReps) return ' (über 15 Reps)';
+  return p.estimated ? ' (geschätzt)' : '';
+}
+function chartPoint(p, y, fmt = fmtPct) {
   const g = gymById(p.gymId);
   return {
-    t: tOf(p.date), y, estimated: p.estimated,
+    t: tOf(p.date), y, estimated: p.estimated, provisional: p.provisional,
     info: formatDate(p.date) + ' · ' + (g ? g.name : '?') + ' · ' + formatWeight(p.weight, p.unit) + ' × ' + p.reps
-      + ' → ' + fmtPct(y) + (p.estimated ? ' (geschätzt)' : ''),
+      + ' → ' + (p.estimated ? 'ca. ' : '') + fmt(y) + pointNote(p),
   };
 }
+
+const EXCLUDE_TEXT = { pause: (e) => `${Math.round(e.days / 7)} Wochen Pause`, neu: () => 'Basis erst ab 3. Training', index: () => 'Index-Stufe' };
 
 function chartLines(all) {
   const from = chartState.range === 'all' ? 0 : tOf(todayISO()) - Number(chartState.range) * 30.5 * 864e5;
@@ -739,7 +792,9 @@ function chartLines(all) {
     const colors = colorIndex();
     return S.exercises.filter((e) => colors.has(e.id)).sort((a, b) => colors.get(a.id) - colors.get(b.id)).map((ex) => {
       const s = all.find((x) => x.exerciseId === ex.id);
-      return { id: ex.id, label: ex.name, color: colors.get(ex.id), points: inRange(s.points.map((p) => chartPoint(p, p.pct))) };
+      // Ohne Basis (weniger als 3 Trainings) noch keine Prozentlinie (Review V3).
+      const pts = s.baseReady ? s.points.map((p) => chartPoint(p, p.pct)) : [];
+      return { id: ex.id, label: ex.name, color: colors.get(ex.id), points: inRange(pts) };
     }).filter((l) => l.points.length);
   }
   const regions = regionSeries(all, S.exercises);
@@ -748,7 +803,9 @@ function chartLines(all) {
     points: inRange(regions[r].map((p) => ({
       t: tOf(p.date), y: p.pct, estimated: p.estimated,
       info: formatDate(p.date) + ' · ' + p.exercises.map((id) => (exById(id) || {}).name).join(', ')
-        + ' → ' + fmtPct(p.pct) + (p.estimated ? ' (geschätzt)' : ''),
+        + ' → ' + (p.estimated ? 'ca. ' : '') + fmtPct(p.pct) + (p.estimated ? ' (geschätzt)' : '')
+        + (p.excluded.length ? ' · nicht im Mittel: ' + p.excluded.map((e) => (exById(e.exerciseId) || {}).name
+          + ' (' + EXCLUDE_TEXT[e.why](e) + ')').join(', ') : ''),
     }))),
   }).filter((l) => l && l.points.length);
 }
@@ -756,11 +813,11 @@ function chartLines(all) {
 function sparkline(s) {
   if (!s || s.points.length < 2) return '<svg class="spark"></svg>';
   const pts = s.points.slice(-10);
-  const ys = pts.map((p) => p.pct);
+  const ys = pts.map((p) => p.value);
   const lo = Math.min(...ys);
   const hi = Math.max(...ys);
   const d = pts.map((p, i) => (i ? 'L' : 'M') + ((i / (pts.length - 1)) * 62 + 1).toFixed(1) + ' '
-    + (hi === lo ? 12 : 22 - ((p.pct - lo) / (hi - lo)) * 20).toFixed(1)).join(' ');
+    + (hi === lo ? 12 : 22 - ((p.value - lo) / (hi - lo)) * 20).toFixed(1)).join(' ');
   return `<svg class="spark" viewBox="0 0 64 24"><path d="${d}"/></svg>`;
 }
 
@@ -776,7 +833,7 @@ function machineHistory(exerciseId, gymId, unit) {
 
 function calSheet(gymId, unit) {
   const ex = exById(view.id);
-  const s = allSeries().find((x) => x.exerciseId === ex.id);
+  const s = seriesOf(ex);
   const [refGym, refUnit] = s.ref ? s.ref.split('|') : [homeGym().id, ex.defaultUnit || 'kg'];
   const cal = S.calibrations.find((c) => c.id === calibrationId(ex.id, gymId, unit)) || {};
   const isRef = s.ref === gymId + '|' + unit;
@@ -787,7 +844,9 @@ function calSheet(gymId, unit) {
     ${isRef ? '' : `<label class="field"><span>1 ${unitName(unit)} hier entspricht … ${unitName(refUnit)} in ${h((gymById(refGym) || {}).name)} (leer = automatisch schätzen)</span>
       <input id="fFactor" inputmode="decimal" value="${cal.factorToHome ? fmtNum(cal.factorToHome) : ''}"></label>`}
     ${unit === 'stufe' ? `<label class="field"><span>kg pro Stufe, falls bekannt (z. B. Plattengewicht)</span>
-      <input id="fKg" inputmode="decimal" value="${cal.kgPerUnit ? fmtNum(cal.kgPerUnit) : ''}"></label>` : ''}
+      <input id="fKg" inputmode="decimal" value="${cal.kgPerUnit ? fmtNum(cal.kgPerUnit) : ''}"></label>
+      <label class="field"><span>Grundgewicht in kg (Schlitten, Stange). Steht meist klein auf dem Stack oder im Handbuch. Wenn unbekannt, leer lassen.</span>
+      <input id="fBaseKg" inputmode="decimal" value="${cal.baseKg != null ? fmtNum(cal.baseKg) : ''}"></label>` : ''}
     ${!isRef || unit === 'stufe' ? '' : '<p class="muted">Das ist das Bezugsgerät, hier gibt es nichts umzurechnen.</p>'}
     <div class="btns"><button data-a="close">Abbrechen</button><button class="primary" data-a="save-cal">Speichern</button></div>`);
 }
@@ -885,9 +944,11 @@ function openExercise(id) {
   const cal = S.calibrations.find((c) => c.exerciseId === id && c.gymId === gym.id);
   if (cal && pref === undefined && log.weight == null) log.unit = cal.unit;
   if (log.unit && log.weight == null) {
-    const series = exerciseSeries(ex, homeGym().id, S.sessions, S.sets, S.calibrations);
-    const w = suggestStartWeight(series, gym.id, log.unit, S.calibrations, id);
-    if (w != null) { log.weight = w; log.fromFactor = true; }
+    const series = seriesOf(ex);
+    const override = S.meta.get('step:' + id + '|' + gym.id + '|' + log.unit) || null;
+    const step = resolveStep(override, null, log.unit, settings());
+    const sug = suggestStartWeight(series, gym.id, log.unit, S.calibrations, id, { reps: settings().lowerReps, step });
+    if (sug) { log.weight = sug.weight; log.fromFactor = sug.reps; }
   }
   view = { name: 'log' };
   flashId = null;
@@ -1243,6 +1304,15 @@ const A = {
     if (info) info.textContent = d.info;
   },
   'edit-cal': (d) => calSheet(d.gym, d.unit),
+  'set-ref': async (d) => {
+    if (!confirm('Bezugsgerät wechseln? Die Kurve dieser Übung wird neu berechnet.')) return;
+    await setMeta('refMachines', { ...refMachines(), [view.id]: d.m });
+    render();
+  },
+  'nudge-off': async (d) => {
+    await setMeta('nudgeHighReps', [...(S.meta.get('nudgeHighReps') || []), d.id]);
+    render();
+  },
   'add-cal': () => {
     openSheet(`<h3>Umrechnung für Gym</h3>
       <label class="field"><span>Gym</span><select id="fGym">${sortedGyms().map((g) => `<option value="${g.id}">${h(g.name)}</option>`).join('')}</select></label>
@@ -1256,9 +1326,13 @@ const A = {
     const id = calibrationId(exId, gym, unit);
     const factor = $('#fFactor') ? parseNum($('#fFactor').value) : null;
     const kg = $('#fKg') ? parseNum($('#fKg').value) : null;
+    const baseKg = $('#fBaseKg') && $('#fBaseKg').value.trim() !== '' ? parseNum($('#fBaseKg').value) : null;
     S.calibrations = S.calibrations.filter((c) => c.id !== id);
     if (factor || kg) {
-      const cal = { id, exerciseId: exId, gymId: gym, unit, factorToHome: factor || null, kgPerUnit: kg || null, source: 'manuell' };
+      const cal = {
+        id, exerciseId: exId, gymId: gym, unit, factorToHome: factor || null, kgPerUnit: kg || null,
+        baseKg: kg ? baseKg : null, source: 'manuell',
+      };
       S.calibrations.push(cal);
       await db.put('calibrations', cal);
     } else {

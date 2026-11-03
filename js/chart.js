@@ -74,7 +74,7 @@ export function lineChart(series, { height = 200, unit = '%', zero = true, direc
   });
   series.forEach((s) => {
     s.points.forEach((p) => {
-      svg += `<circle class="dot${p.estimated ? ' est' : ''}" cx="${x(p.t).toFixed(1)}" cy="${y(p.y).toFixed(1)}" r="4" style="--c:var(--s${s.color})"/>`;
+      svg += `<circle class="dot${p.estimated ? ' est' : ''}${p.provisional ? ' prov' : ''}" cx="${x(p.t).toFixed(1)}" cy="${y(p.y).toFixed(1)}" r="4" style="--c:var(--s${s.color})"/>`;
     });
   });
   // Direkte Beschriftung am Linienende (nur bei wenigen Serien), Kollisionen nach unten schieben.

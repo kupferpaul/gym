@@ -164,8 +164,11 @@ export function regionSeries(seriesList, exercises) {
   Object.keys(REGIONS).forEach((region) => {
     const members = seriesList.filter((s) => s.points.length && regionOf((exById.get(s.exerciseId) || {}).muscleGroup) === region);
     if (!members.length) return;
-    const eligible = members.filter((s) => s.baseReady && !s.points[s.points.length - 1].index);
-    const all = eligible.flatMap((s) => s.points
+    // Index-Stufen-Punkte zählen nicht (z. B. Reise-Gym mit Pin 7); eine Übung fällt nur ganz raus,
+    // wenn sie ausschließlich Index-Stufen hat.
+    const usable = (s) => s.points.filter((p) => !p.index);
+    const eligible = members.filter((s) => s.baseReady && usable(s).length);
+    const all = eligible.flatMap((s) => usable(s)
       .filter((p) => p.date >= s.establishedDate)
       .map((p) => ({ ...p, exerciseId: s.exerciseId })))
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
@@ -177,8 +180,8 @@ export function regionSeries(seriesList, exercises) {
       const excluded = [];
       members.forEach((s) => {
         const ok = eligible.includes(s) && s.establishedDate <= day;
-        const last = s.points.filter((p) => p.date <= day).pop();
-        if (!ok || !last) { excluded.push({ exerciseId: s.exerciseId, why: s.points[s.points.length - 1].index ? 'index' : 'neu' }); return; }
+        const last = usable(s).filter((p) => p.date <= day).pop();
+        if (!ok || !last) { excluded.push({ exerciseId: s.exerciseId, why: s.baseReady && !usable(s).length ? 'index' : 'neu' }); return; }
         if (dayNum(day) - dayNum(last.date) > REGION_DECAY_DAYS) { excluded.push({ exerciseId: s.exerciseId, why: 'pause', days: dayNum(day) - dayNum(last.date) }); return; }
         current.push(last);
       });

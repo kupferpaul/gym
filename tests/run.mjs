@@ -492,6 +492,13 @@ test('Sprüche: fest pro Training, aus der Liste', () => {
     assert.strictEqual(r.Brust.find((p) => p.date === '2026-08-31').pct, 6); // (5 + 7) / 2
   });
 
+  test('Region: Index-Punkt im Reise-Gym wirft die Übung nicht raus', () => {
+    const pt = (date, pct, index = false) => ({ date, pct, value: 100, sessionId: date, index });
+    const press = { exerciseId: 'press', baseReady: true, establishedDate: '2026-09-01', points: [pt('2026-09-01', 0), pt('2026-09-10', 10), pt('2026-09-20', 12, true)] };
+    const r = regionSeries([press], [{ id: 'press', muscleGroup: 'chest' }]);
+    assert.deepStrictEqual(r.Brust.map((p) => [p.date, p.pct]), [['2026-09-01', 0], ['2026-09-10', 10]]);
+  });
+
   test('Region: Index-Stufen-Übung zählt nicht', () => {
     const pt = (date, pct) => ({ date, pct, value: 100, sessionId: date, index: true });
     const row = { exerciseId: 'row', baseReady: true, establishedDate: '2026-09-01', points: [pt('2026-09-01', 0), pt('2026-09-10', 22)] };

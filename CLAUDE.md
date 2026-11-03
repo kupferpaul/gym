@@ -48,9 +48,13 @@ IndexedDB über `js/db.js`, Offline über `sw.js`. Deploy: GitHub Pages (`kupfer
   mit `oldVersion`-Prüfung ändern, nie Stores löschen oder neu anlegen.
 - Bei jeder Änderung an ausgelieferten Dateien `CACHE_VERSION` in `sw.js` erhöhen; neue Dateien in `FILES` eintragen.
 - Logik (Vergleich, Sortierung, Backup) als pure Funktionen in `js/logic.js`, `js/progress.js` bzw. `js/backup.js`, mit Tests.
-- Vergleich (§4, vom Nutzer angepasst): höheres Gewicht ist immer besser, niedrigeres immer schlechter;
-  bei gleichem Gewicht entscheiden die Gesamt-Reps der Arbeitssätze (Sätze mit Höchstgewicht; leichtere
-  Herantast-Sätze zählen nicht); ohne Gewicht/andere Einheit nur Reps, markiert.
+- Vergleich Weg 1 (§4, angepasst nach Expert Review V1/V8): Arbeitssätze = ≥ 90 % des Höchstgewichts.
+  Mehr Gewicht: ▲ wenn Gesamt-Reps ≥ max(60 % vom letzten Mal, Arbeitssätze × untere Rep-Grenze 8), sonst ▬
+  „Reps im Aufbau“, nie ▼. Weniger Gewicht: ▼. Gleiches Gewicht: Gesamt-Reps entscheiden. Ohne Gewicht: nur Reps.
+- Kurve Weg 2 (Expert Review P1, Datei private/expert-review-fortschrittsberechnung.md): Basis = Median der ersten
+  3 Trainings (oder der ersten 21 Tage), Faktor = Median-Verhältnis aus bis zu 3 Trainings je Seite (vorläufig bis 3),
+  Bezugsgerät pro Übung in meta `refMachines` gespeichert, Region mit Eintritt/56-Tage-Verfall, Trend Theil-Sen ±3 %.
+  Etappe 2 (P2) und 3 (P3) des Reviews erst nach iPhone-Test.
 - Satz eintragen ohne Tastatur in < 5 s; Touch-Ziele ≥ 56px, wichtige Tasten unten.
 - Relative Pfade (App läuft unter /gym/). Oberfläche auf Deutsch, Dark Mode.
 - Repo ist öffentlich: keine Schlüssel, keine persönlichen Daten (Seed erst nach Rückfrage committen).
