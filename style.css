@@ -243,3 +243,10 @@ button.more { width: 100%; margin-top: 16px; color: var(--muted); }
 .r1 { color: var(--accent); }
 .r0 { color: var(--muted); }
 .r-1 { color: var(--down); }
+
+/* Lauf-Ampel: echte Ampelfarben aus der Diagramm-Palette (Ausnahme von BRAND, vom Nutzer gewünscht).
+   Grün-Türkis statt --s6, weil --s6 auf Karten nur 2,9:1 Kontrast hätte. */
+.amp-g { color: var(--s3); }
+.amp-y { color: var(--s4); }
+.amp-r { color: var(--s8); }
+.amp-g, .amp-y, .amp-r { font-weight: 700; }

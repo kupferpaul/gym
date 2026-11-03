@@ -68,12 +68,13 @@ function runPseudoSets() {
   }));
 }
 
-// Ampel nach BRAND: Grün = Messing ▲, Gelb = Stein ▬, Rot = Rost ▼ – immer mit Symbol und Wort.
+// Lauf-Ampel in echten Ampelfarben (Ausnahme von BRAND, Farben aus der Diagramm-Palette),
+// immer mit Symbol und Wort.
 const RUN_STATUS = {
-  green: ['r1', '▲', 'Grün'], yellow: ['r0', '▬', 'Gelb'], red: ['r-1', '▼', 'Rot'],
-  red2: ['r-1', '▼', 'Rot'], incomplete: ['r0', '?', 'Knie fehlt'],
+  green: ['amp-g', '▲', 'Grün'], yellow: ['amp-y', '▬', 'Gelb'], red: ['amp-r', '▼', 'Rot'],
+  red2: ['amp-r', '▼', 'Rot'], incomplete: ['r0', '?', 'Knie fehlt'],
 };
-const RUN_MODE = { green: ['r1', '▲', 'Grün'], deload: ['r0', '▬', 'Entlastung'], red: ['r-1', '▼', 'Rot'], red2: ['r-1', '▼', 'Rot'] };
+const RUN_MODE = { green: ['amp-g', '▲', 'Grün'], deload: ['amp-y', '▬', 'Entlastung'], red: ['amp-r', '▼', 'Rot'], red2: ['amp-r', '▼', 'Rot'] };
 const chip = ([cls, sym, label]) => `<span class="${cls}">${sym} ${label}</span>`;
 const runLine = (r) => formatKm(r.distanceKm) + ' · ' + formatDuration(r.durationSec) + ' · '
   + formatPace(paceSec(r)) + (isComplete(r) ? ' · Knie ' + r.kneeDuring : '');

@@ -26,6 +26,7 @@ IndexedDB über `js/db.js`, Offline über `sw.js`. Deploy: GitHub Pages (`kupfer
   `--accent` #F2B33D Messing (Fortschritt + eine Hauptaktion pro Screen) · `--muted` #8E8B85 Stein · `--down` #E5675A Rost
 - Status immer mit Pfeil: besser ▲ Messing, gleich ▬ Stein, schlechter ▼ Rost.
 - Ausnahme: Diagramm-Linien nutzen die geprüfte Palette `--s1..--s8` (Dark-Variante), nur im Diagramm.
+- Ausnahme: Lauf-Ampel in echten Ampelfarben aus dieser Palette: Grün `--s3`, Gelb `--s4`, Rot `--s8` (Klassen `amp-*`).
 - Schrift: `ui-rounded, -apple-system, system-ui, sans-serif`; Zahlen `tabular-nums`.
 - Touch-Ziele ≥ 56 px, Nummernpad-Tasten ≥ 64 px; Radien Buttons 14 px, Karten 20 px.
 - Keine Emojis in der UI. Bewusste Ausnahme: Zitate in der Zusammenfassung (vom Nutzer gewünscht).
