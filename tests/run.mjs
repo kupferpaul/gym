@@ -592,6 +592,10 @@ test('Sprüche: fest pro Training, aus der Liste', () => {
     assert.strictEqual(b.Brust, 2); // Herantast-Satz und alter Termin zählen nicht
     assert.strictEqual(b.Arme, 1);
     assert.strictEqual(b.Beine, 0);
+    // Körpergewicht: 90-%-Regel auf der wirksamen Last, nicht auf dem Zusatz
+    const bwSets = [set('a1', 'k', 1, 0, 'kg', 8), set('a1', 'k', 2, 2.5, 'kg', 6), set('a1', 'k', 3, -5, 'kg', 10)];
+    const k = regionBalance(ss, bwSets, [{ id: 'k', name: 'Klimmzug', muscleGroup: 'lats', kind: 'bodyweight' }], '2026-10-20', 28, [{ date: '2026-10-01', kg: 80 }]);
+    assert.strictEqual(k['Rücken'], 3);
   });
 
   test('Review V18: Volumen über Arbeitssätze, umgerechnet', () => {

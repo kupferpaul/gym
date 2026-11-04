@@ -1,4 +1,4 @@
-const CACHE_VERSION = 11;
+const CACHE_VERSION = 12;
 const CACHE = 'gym-v' + CACHE_VERSION;
 const FILES = [
   './', 'index.html', 'style.css', 'manifest.json',

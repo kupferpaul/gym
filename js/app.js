@@ -17,6 +17,7 @@ import {
 import { AUTHORS, pickQuote, sourceLabel } from './quotes.js';
 import {
   REGIONS, regionOf, exerciseSeries, regionSeries, recentTrend, suggestStartWeight, calibrationId,
+  isUniversal, isBodyweight, effectiveSets, bodyWeightAt, secondaryOf, regionBalance, defaultBodyShare,
 } from './stats.js';
 import { lineChart } from './chart.js';
 
@@ -237,11 +238,25 @@ function render() {
   }
 }
 
-function setSummary(list) {
+// Körpergewicht und Vergleich über Gyms
+const bodyWeights = () => S.meta.get('bodyWeights') || [];
+const effOf = (ex, list) => effectiveSets(ex, list, S.sessions, bodyWeights());
+const gymScope = (ex) => (isUniversal(ex) ? null : currentGym().id);
+
+// Anzeige eines Gewichts; bei Körpergewichtsübungen der Zusatz ("KG + 10 kg").
+function weightLabel(ex, weight, unit) {
+  if (!isBodyweight(ex)) return formatWeight(weight, unit);
+  const add = weight || 0;
+  if (!add) return 'Körpergewicht';
+  return 'KG ' + (add > 0 ? '+ ' : '− ') + fmtNum(Math.abs(add)) + ' kg';
+}
+const setLabel = (ex, s) => weightLabel(ex, s.addKg !== undefined ? s.addKg : s.weight, s.unit);
+
+function setSummary(list, ex) {
   const sorted = list.slice().sort(byOrder);
-  const sameWeight = sorted.every((s) => s.weight === sorted[0].weight && s.unit === sorted[0].unit);
-  if (sameWeight) return formatWeight(sorted[0].weight, sorted[0].unit) + ' · ' + sorted.map((s) => s.reps).join(' · ');
-  return sorted.map((s) => formatWeight(s.weight, s.unit) + ' × ' + s.reps).join(' · ');
+  const labels = sorted.map((s) => setLabel(ex, s));
+  if (labels.every((l) => l === labels[0])) return labels[0] + ' · ' + sorted.map((s) => s.reps).join(' · ');
+  return sorted.map((s, i) => labels[i] + ' × ' + s.reps).join(' · ');
 }
 
 // Logo-Kleinversion (brand/satz-symbol-small.svg, für unter 48 px), eingefärbt über CSS-Variablen.
@@ -296,11 +311,11 @@ const VIEWS = {
           }).join('');
         }
         const list = todaySets.filter((s) => s.exerciseId === id);
-        const prev = previousSets(id, gym.id, S.sessions, S.sets, session.id);
-        const res = prev ? compareSets(prev.sets, list, settings().lowerReps).result : null;
+        const prev = previousSets(id, gymScope(ex), S.sessions, S.sets, session.id);
+        const res = prev ? compareSets(effOf(ex, prev.sets), effOf(ex, list), settings().lowerReps).result : null;
         const arrow = prev ? `<span class="r${res}">${ARROWS[res]}</span> ` : '';
         return `<button class="row" data-a="open-ex" data-id="${id}"><div class="main">
-          <div class="title">${h(ex ? ex.name : '?')}</div><div class="sub">${h(setSummary(list))}</div></div>
+          <div class="title">${h(ex ? ex.name : '?')}</div><div class="sub">${h(setSummary(list, ex))}</div></div>
           <span class="badge">${arrow}✓ ${list.length}</span></button>`;
       }).join('') + '</div>';
       out += '<button class="primary finish" data-a="finish">Training abschließen</button>';
@@ -332,7 +347,10 @@ const VIEWS = {
   summary() {
     const session = S.sessions.find((s) => s.id === view.id);
     if (!session) { view = { name: 'home' }; return VIEWS.home(); }
-    const sum = sessionSummary(session, S.sessions, S.sets, settings().lowerReps);
+    const sum = sessionSummary(session, S.sessions, S.sets, settings().lowerReps, {
+      anyGym: (id) => isUniversal(exById(id)),
+      effective: (id, list) => effOf(exById(id), list),
+    });
     const quote = pickQuote(session.id);
     const g = gymById(session.gymId);
     const sRuns = runsOf(session.id);
@@ -359,7 +377,7 @@ const VIEWS = {
         const ex = exById(e.exerciseId);
         const fb = e.cmp ? `<span class="trend r${e.cmp.result}">${ARROWS[e.cmp.result]}</span>` : '<span class="trend none">neu</span>';
         return `<div class="row"><div class="main"><div class="title">${h(ex ? ex.name : '?')}</div>
-          <div class="sub">${h(setSummary(e.sets))}${e.cmp ? ' · ' + h(feedbackText(e.cmp, e.prev.session.date)) : ''}</div></div>${fb}</div>`;
+          <div class="sub">${h(setSummary(e.sets, ex))}${e.cmp ? ' · ' + h(feedbackText(e.cmp, e.prev.session.date)) : ''}</div></div>${fb}</div>`;
       }).join('')}${runRows}</div>
       <p class="muted small">${h(formatDate(session.date))} · ${h(g ? g.name : '?')}</p>
       <button class="primary finish" data-a="tab" data-view="sessions">Fortschritt ansehen</button>
@@ -370,34 +388,45 @@ const VIEWS = {
     const ex = exById(log.exerciseId);
     const session = todaySession();
     const list = session ? setsOf(session.id).filter((s) => s.exerciseId === ex.id).sort(byOrder) : [];
-    const prev = previousSets(ex.id, currentGym().id, S.sessions, S.sets, session && session.id);
+    const prev = previousSets(ex.id, gymScope(ex), S.sessions, S.sets, session && session.id);
     const st = settings();
+    const isBw = isBodyweight(ex);
     const unit = log.unit;
     const keys = Array.from({ length: 20 }, (_, i) => `<button data-a="rep" data-n="${i + 1}">${i + 1}</button>`).join('');
     const segBtn = (u, label) => `<button data-a="unit" data-u="${u}" class="${unit === (u || null) ? 'on' : ''}">${label}</button>`;
 
     // Geisterwert (Review V8): Index zählt nur über Arbeitssätze (≥ 90 % des Höchstgewichts).
     // Arbeitssatz n wird mit dem n-ten Arbeitssatz vom letzten Mal verglichen; Herantast-Sätze bekommen keinen.
-    const prevWork = prev ? workingSets(prev.sets) : null;
-    const curWork = workingSets(list);
+    // Bei Körpergewicht wird mit der wirksamen Last verglichen (Anteil × Körpergewicht + Zusatz).
+    const prevEff = prev ? effOf(ex, prev.sets) : null;
+    const curEff = effOf(ex, list);
+    const prevWork = prev ? workingSets(prevEff) : null;
+    const curWork = workingSets(curEff);
     const ghost = (s) => {
-      const p = prevWork && prevWork[curWork.indexOf(s)];
+      const i = curWork.findIndex((x) => x.id === s.id);
+      const p = prevWork && i >= 0 ? prevWork[i] : null;
       if (!p) return '';
-      const r = compareSet(p, s, st.lowerReps);
+      const r = compareSet(p, curWork[i], st.lowerReps);
       return `<span class="ghost r${r}">${ARROWS[r]} (${p.reps})</span>`;
     };
+    const planned = isBw ? (ex.bodyShare || 1) * (bodyWeightAt(bodyWeights(), todayISO()) || 0) + (log.weight || 0) : log.weight;
     let info = '';
     if (prev && curWork.length >= prevWork.length) {
-      const cmp = compareSets(prev.sets, list, st.lowerReps);
+      const cmp = compareSets(prevEff, curEff, st.lowerReps);
       info = `<div class="feedback r${cmp.result}">${ARROWS[cmp.result]} ${h(feedbackText(cmp, prev.session.date))}</div>`;
-    } else if (!list.length && prev && suggestIncrease(prev.sets, log.weight, unit, st.increaseThreshold)) {
+    } else if (!list.length && prev && suggestIncrease(prevEff, planned, unit, st.increaseThreshold)) {
       info = `<div class="banner"><span>Letztes Mal alle Sätze ≥ ${st.increaseThreshold} Reps. Gewicht erhöhen?</span>
         <button class="primary" data-a="step" data-d="1">+${h(stepLabel(stepInfo().step, unit))}</button></div>`;
     } else if (!list.length && log.fromFactor) {
       info = `<div class="feedback">Erstes Mal hier: Vorschlag für ca. ${log.fromFactor} Reps aus deiner Umrechnung.</div>`;
     }
     const step = unit ? fmtNum(stepInfo().step) : '';
-    const target = prev ? ghostText(prevWork, curWork.length + 1) : null;
+    const target = prev ? ghostText(prevWork, curWork.length + 1, (w, u, s) => setLabel(ex, s)) : null;
+    const lastSetRow = list[list.length - 1];
+    const rirRow = st.rirInput && lastSetRow ? `<div class="seg rir"><span class="small muted">Reserve</span>${[0, 1, 2, 3, 4].map((n) =>
+      `<button data-a="quick-rir" data-id="${lastSetRow.id}" data-v="${n}" class="${lastSetRow.rir === n ? 'on' : ''}">${n}</button>`).join('')}</div>` : '';
+    const needsBw = isBw && !bodyWeights().length
+      ? '<div class="card"><div class="sub">Für die Kurve fehlt dein Körpergewicht.</div><button class="ghost small" data-a="add-bw">Körpergewicht eintragen</button></div>' : '';
     const targetText = target ? 'Ziel: ' + target : prev ? 'Extra-Satz' : 'Erstes Mal hier';
 
     return `<header class="bar">
@@ -405,18 +434,18 @@ const VIEWS = {
         <div class="titles" data-a="edit-ex"><h1>${h(ex.name)}</h1><div class="date">${h(currentGym().name)}</div></div></header>
       <div class="list sets">${list.length ? list.map((s) => `
         <button class="row ${s.id === flashId ? 'flash' : ''}" data-a="edit-set" data-id="${s.id}">
-          <span class="num">Satz ${s.order}</span><span class="main title">${h(formatWeight(s.weight, s.unit))}</span>
+          <span class="num">Satz ${s.order}</span><span class="main title">${h(setLabel(ex, s))}</span>
           <span class="title">× ${s.reps}</span>${ghost(s)}</button>`).join('')
-        : `<div class="empty">${prev ? 'Letztes Mal (' + h(formatDate(prev.session.date)) + '): ' + h(setSummary(prev.sets)) : 'Noch kein Satz. Tippe die Reps unten.'}</div>`}</div>
-      ${info}
+        : `<div class="empty">${prev ? 'Letztes Mal (' + h(formatDate(prev.session.date)) + '): ' + h(setSummary(prev.sets, ex)) : 'Noch kein Satz. Tippe die Reps unten.'}</div>`}</div>
+      ${rirRow}${needsBw}${info}
       <div class="panel">
         <div class="strip">${timerHtml(true)}<span class="target">${h(targetText)}</span></div>
         <div class="weight">
           <button data-a="step" data-d="-1" ${unit ? '' : 'disabled'}>−<small>${step}</small></button>
-          <button class="val" data-a="type-weight" ${unit ? '' : 'disabled'}>${h(!unit ? 'ohne Gewicht' : log.weight == null ? (unit === 'stufe' ? 'Stufe –' : '– kg') : formatWeight(log.weight, unit))}</button>
+          <button class="val" data-a="type-weight" ${unit ? '' : 'disabled'}>${h(isBw ? weightLabel(ex, log.weight, unit) : !unit ? 'ohne Gewicht' : log.weight == null ? (unit === 'stufe' ? 'Stufe –' : '– kg') : formatWeight(log.weight, unit))}</button>
           <button data-a="step" data-d="1" ${unit ? '' : 'disabled'}>+<small>${step}</small></button>
         </div>
-        <div class="seg">${segBtn('kg', 'kg')}${segBtn('stufe', 'Stufe')}${segBtn('', 'ohne')}</div>
+        ${isBw ? '' : `<div class="seg">${segBtn('kg', 'kg')}${segBtn('stufe', 'Stufe')}${segBtn('', 'ohne')}</div>`}
         <div class="reps">${keys}</div>
         <div class="actions">
           <button data-a="undo" ${list.length ? '' : 'disabled'}>↶ Rückgängig</button>
@@ -443,7 +472,10 @@ const VIEWS = {
     const all = allSeries();
     const lines = chartLines(all);
     const visible = lines.filter((l) => !chartState.hidden.has(l.id));
-    out += segs('chart-mode', chartState.mode, [['regions', 'Körperregionen'], ['exercises', 'Übungen']]);
+    out += segs('chart-mode', chartState.mode, [['regions', 'Regionen'], ['exercises', 'Übungen'], ['balance', 'Balance']]);
+    if (chartState.mode === 'balance') {
+      out += '<div style="height:8px"></div>' + balanceBars();
+    } else {
     out += `<div class="chartbox" style="margin-top:8px">${lineChart(visible, { height: 220 })}
       <div class="chart-info" id="chartInfo">Tippe auf einen Punkt für Details.</div></div>`;
     // Bei 3/6 Monaten zusätzlich die Veränderung seit Fensterbeginn (Linie bleibt auf der Gesamtbasis).
@@ -460,6 +492,7 @@ const VIEWS = {
     out += `<p class="muted small">0 % = Median der ersten 3 Trainings einer Übung. Hohle Punkte sind geschätzt
       (anderes Gym, Index-Stufe oder über 15 Reps), gestrichelte vorläufig.${chartState.range === 'all' ? '' : ' Zahl an der Legende: Veränderung seit Beginn des Zeitraums.'}
       ${noBase.length ? ' Prozent ab dem 3. Training: ' + h(noBase.join(', ')) + '.' : ''}</p>`;
+    }
 
     const today = todayISO();
     out += '<h2>Übungen · letzte 4 Wochen (* geschätzt)</h2><div class="list">' + sortExercises(S.exercises, S.sets).filter((ex) => ex.kind !== 'run').map((ex) => {
@@ -489,7 +522,7 @@ const VIEWS = {
       const g = gymById(s.gymId);
       const lines = exerciseSequence(sets).map((id) => {
         const ex = exById(id);
-        return `<div class="sub"><b>${h(ex ? ex.name : '?')}</b>  ${h(setSummary(sets.filter((x) => x.exerciseId === id)))}</div>`;
+        return `<div class="sub"><b>${h(ex ? ex.name : '?')}</b>  ${h(setSummary(sets.filter((x) => x.exerciseId === id), ex))}</div>`;
       }).join('') + runsOf(s.id).map((r) => `<div class="sub"><b>Lauf</b>  ${h(runLine(r))}</div>`).join('');
       return `<button class="row" data-a="open-session" data-id="${s.id}"><div class="main">
         <div class="title">${h(formatDate(s.date))} · ${h(g ? g.name : '?')}</div>${lines}</div><span class="muted">›</span></button>`;
@@ -505,12 +538,23 @@ const VIEWS = {
     const nudged = (S.meta.get('nudgeHighReps') || []).includes(ex.id);
     let out = `<header class="bar"><button class="back ghost" data-a="tab" data-view="sessions" aria-label="Zurück">‹</button>
       <div class="titles"><h1>${h(ex.name)}</h1><div class="date">${h(muscleLabel(ex.muscleGroup))}</div></div></header>`;
-    if (!s.points.length) return out + '<div class="empty">Noch keine Trainings mit Gewicht.</div>';
+    if (!s.points.length) {
+      return out + (s.needsBodyWeight
+        ? '<div class="empty">Für die Kurve fehlt dein Körpergewicht.</div><button class="primary finish" data-a="add-bw">Körpergewicht eintragen</button>'
+        : '<div class="empty">Noch keine Trainings mit Gewicht.</div>');
+    }
     // Ohne Basis (Review V3): absolute Werte in Bezugseinheiten statt Prozent.
     const absFmt = (v) => fmtNum(Math.round(v));
-    const line = { id: ex.id, label: ex.name, color, points: s.points.map((p) => (s.baseReady ? chartPoint(p, p.pct) : chartPoint(p, p.value, absFmt))) };
-    out += `<h2>${s.baseReady ? 'Fortschritt über alle Gyms' : 'Geschätztes Maximum (Prozent ab dem 3. Training)'}</h2>
-      <div class="chartbox">${lineChart([line], s.baseReady ? { height: 180 } : { height: 180, unit: '', zero: false, fmt: absFmt })}
+    const volume = chartState.exMetric === 'volume';
+    const usePct = s.baseReady && !volume;
+    const line = {
+      id: ex.id, label: ex.name, color,
+      points: s.points.map((p) => (volume ? chartPoint(p, p.volumeValue, absFmt) : usePct ? chartPoint(p, p.pct) : chartPoint(p, p.value, absFmt))),
+    };
+    out += `<div class="seg">${[['strength', 'Stärke'], ['volume', 'Volumen']].map(([v, l]) =>
+      `<button data-a="ex-metric" data-v="${v}" class="${chartState.exMetric === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    out += `<h2>${volume ? 'Volumen pro Training (Last × Reps der Arbeitssätze)' : s.baseReady ? 'Fortschritt über alle Gyms' : 'Geschätztes Maximum (Prozent ab dem 3. Training)'}</h2>
+      <div class="chartbox">${lineChart([line], usePct ? { height: 180 } : { height: 180, unit: '', zero: false, fmt: absFmt })}
       <div class="chart-info" id="chartInfo">Tippe auf einen Punkt für Details.</div></div>`;
     if (!nudged && s.points.some((p) => p.highReps)) {
       out += `<div class="card"><div class="sub">Ein Arbeitssatz unter 12 Reps macht die Kurve genauer (über 15 Reps ist die Schätzung unsicher).</div>
@@ -548,6 +592,7 @@ const VIEWS = {
         geschätzt: () => ` (geschätzt aus 3 Trainings, Anker ${h(formatDate(f.anchorDate))})`,
         vorläufig: () => ` (vorläufig, ${f.newCount} von 3 Trainings)`,
         kg: () => ' (über kg pro Stufe)',
+        gleich: () => ' (Gewicht überall gleich)',
         manuell: () => ' (von dir)',
       };
       const calText = f.source === 'bezug'
@@ -577,7 +622,7 @@ const VIEWS = {
         const ex = exById(id);
         return `<h2>${h(ex ? ex.name : '?')}</h2><div class="list sets">` + sets.filter((x) => x.exerciseId === id).sort(byOrder).map((x) => `
           <button class="row" data-a="edit-set" data-id="${x.id}"><span class="num">Satz ${x.order}</span>
-          <span class="main title">${h(formatWeight(x.weight, x.unit))}</span><span class="title">× ${x.reps}</span></button>`).join('') + '</div>';
+          <span class="main title">${h(setLabel(ex, x))}</span><span class="title">× ${x.reps}</span></button>`).join('') + '</div>';
       }).join('')}
       ${runsOf(s.id).length ? '<h2>Lauf</h2><div class="list">' + runsOf(s.id).map((r) => `<button class="row" data-a="edit-run" data-id="${r.id}">
         <div class="main title">${h(runLine(r))}</div><span class="muted">›</span></button>`).join('') + '</div>' : ''}
@@ -670,6 +715,10 @@ const VIEWS = {
       <h2>Pause</h2><div class="seg">${opt('restSeconds', [30, 45, 60, 90, 120, 180], formatClock)}</div>
       <h2>„Gewicht erhöhen?“ ab Reps in allen Sätzen</h2><div class="seg">${opt('increaseThreshold', [8, 10, 11, 12, 13, 15], String)}</div>
       <h2>Untere Rep-Grenze (mehr Gewicht zählt als besser, wenn die Reps reichen)</h2><div class="seg">${opt('lowerReps', [5, 6, 8, 10], String)}</div>
+      <h2>Reserve (RIR) direkt beim Satz abfragen</h2><div class="seg">${opt('rirInput', [true, false], (v) => (v ? 'An' : 'Aus'))}</div>
+      <h2>Körpergewicht</h2><div class="list">${bodyWeights().slice().sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 5).map((e) => `
+        <button class="row" data-a="del-bw" data-date="${e.date}"><div class="main title">${h(fmtNum(e.kg))} kg</div><span class="badge">${h(formatDate(e.date))}</span></button>`).join('')}
+        <button class="row add" data-a="add-bw">+ Körpergewicht eintragen</button></div>
       <h2>Bildschirm während Training anlassen</h2><div class="seg">${opt('wakeLock', [true, false], (v) => (v ? 'An' : 'Aus'))}</div>
       <div class="list" style="margin-top:8px"><button class="row" data-a="test-beep"><div class="main"><div class="title">Ton testen</div>
         <div class="sub">So klingt das Pausenende (Lautstärke, Lautlos-Schalter)</div></div></button></div>
@@ -728,7 +777,7 @@ const stepKey = () => 'step:' + log.exerciseId + '|' + currentGym().id + '|' + l
 
 function stepInfo() {
   const override = S.meta.get(stepKey()) || null;
-  const history = historyStep(log.exerciseId, currentGym().id, log.unit, S.sessions, S.sets);
+  const history = historyStep(log.exerciseId, gymScope(exById(log.exerciseId)), log.unit, S.sessions, S.sets);
   return { override, history, step: resolveStep(override, history, log.unit, settings()) };
 }
 
@@ -737,7 +786,21 @@ function stepLabel(step, unit) {
 }
 
 // ---------- Verlauf / Statistik ----------
-const chartState = { area: 'kraft', mode: 'regions', range: 'all', hidden: new Set() };
+const chartState = { area: 'kraft', mode: 'regions', range: 'all', hidden: new Set(), exMetric: 'strength' };
+
+// V17: Balken "Arbeitssätze pro Region in 28 Tagen", hinterlegt mit dem Richtwert 10–20 Sätze pro Woche.
+function balanceBars() {
+  const data = regionBalance(S.sessions, S.sets, S.exercises, todayISO(), 28, bodyWeights());
+  const LOW = 40;
+  const HIGH = 80;
+  const max = Math.max(HIGH, ...Object.values(data));
+  const pct = (v) => (v / max) * 100;
+  return '<div class="card balance">' + Object.keys(REGIONS).map((r, i) => `<div class="bal">
+      <div class="bal-top"><span>${h(r)}</span><b>${fmtNum(data[r])}</b></div>
+      <div class="bal-track"><span class="bal-band" style="left:${pct(LOW)}%;width:${pct(HIGH - LOW)}%"></span>
+        <span class="bal-bar" style="width:${pct(data[r])}%;background:var(--s${i + 1})"></span></div></div>`).join('')
+    + '<p class="muted small">Arbeitssätze der letzten 28 Tage, zweite Muskelgruppe zählt halb. Helles Band: Richtwert 10–20 Sätze pro Woche. Keine Schätzung, reine Zählung.</p></div>';
+}
 const tOf = (iso) => Date.parse(iso + 'T00:00:00Z');
 const fmtPct = (v) => (v > 0 ? '+' : v < 0 ? '−' : '±') + fmtNum(Math.abs(Math.round(v))) + ' %';
 
@@ -745,7 +808,7 @@ const fmtPct = (v) => (v > 0 ? '+' : v < 0 ? '−' : '±') + fmtNum(Math.abs(Mat
 // verschiebt so keine Kurven. Umsetzen nur bewusst auf der Übungsseite.
 const refMachines = () => S.meta.get('refMachines') || {};
 function seriesOf(ex) {
-  return exerciseSeries(ex, homeGym().id, S.sessions, S.sets, S.calibrations, { refMachine: refMachines()[ex.id], today: todayISO() });
+  return exerciseSeries(ex, homeGym().id, S.sessions, S.sets, S.calibrations, { refMachine: refMachines()[ex.id], today: todayISO(), bodyWeights: bodyWeights() });
 }
 function allSeries() {
   const all = S.exercises.map(seriesOf);
@@ -761,7 +824,7 @@ function allSeries() {
 
 // Farbe folgt der Übung (feste Reihenfolge nach Anlage), nie dem Rang; mehr als 8 → nicht im Gesamtbild.
 function colorIndex() {
-  const withData = new Set(S.sets.filter((s) => s.weight != null).map((s) => s.exerciseId));
+  const withData = new Set(S.sets.filter((s) => s.weight != null || isBodyweight(exById(s.exerciseId))).map((s) => s.exerciseId));
   const map = new Map();
   S.exercises.filter((e) => withData.has(e.id)).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
     .slice(0, 8).forEach((e, i) => map.set(e.id, i + 1));
@@ -939,7 +1002,7 @@ function openExercise(id) {
   const ex = exById(id);
   const gym = currentGym();
   const pref = S.meta.get('unitPref:' + id + '|' + gym.id);
-  log = { exerciseId: id, ...prefill(ex, gym.id, S.sessions, S.sets, pref) };
+  log = { exerciseId: id, ...prefill(isBodyweight(ex) ? { ...ex, defaultUnit: 'kg' } : ex, gymScope(ex), S.sessions, S.sets, isBodyweight(ex) ? 'kg' : pref) };
   // Neues Gym ohne Historie: Startgewicht aus der Umrechnung vorschlagen, falls eine eingetragen ist.
   const cal = S.calibrations.find((c) => c.exerciseId === id && c.gymId === gym.id);
   if (cal && pref === undefined && log.weight == null) log.unit = cal.unit;
@@ -1019,14 +1082,25 @@ function unitButtons(current) {
 }
 
 function editSetSheet(set) {
+  const bw = isBodyweight(exById(set.exerciseId));
   openSheet(`<h3>Satz ${set.order} bearbeiten</h3>
-    <label class="field"><span>Gewicht</span><input id="fWeight" inputmode="decimal" value="${set.weight == null ? '' : String(set.weight).replace('.', ',')}"></label>
-    <div class="field"><span>Einheit</span>${unitButtons(set.unit)}</div>
+    <label class="field"><span>${bw ? 'Zusatz in kg (leer = nur Körpergewicht, negativ = Unterstützung)' : 'Gewicht'}</span><input id="fWeight" inputmode="${bw ? 'text' : 'decimal'}" value="${set.weight == null ? '' : String(set.weight).replace('.', ',')}"></label>
+    ${bw ? '' : `<div class="field"><span>Einheit</span>${unitButtons(set.unit)}</div>`}
     <label class="field"><span>Reps</span><input id="fReps" inputmode="numeric" value="${set.reps}"></label>
+    <div class="field"><span>Reserve (RIR): Wiederholungen, die noch gegangen wären. Optional.</span>
+      <div class="seg" id="rirSeg">${[['', '–'], ['0', '0'], ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4']].map(([v, l]) =>
+    `<button type="button" data-a="sheet-rir" data-v="${v}" class="${String(set.rir == null ? '' : set.rir) === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
     <div class="btns"><button class="danger" data-a="del-set" data-id="${set.id}">Löschen</button>
       <button data-a="close">Abbrechen</button><button class="primary" data-a="save-set" data-id="${set.id}">Speichern</button></div>`);
-  sheet.dataset.unit = set.unit || '';
+  sheet.dataset.unit = bw ? 'kg' : set.unit || '';
+  sheet.dataset.rir = set.rir == null ? '' : String(set.rir);
 }
+
+// Mit Vorzeichen, für Zusatzlast bei Körpergewicht (negativ = Unterstützung).
+const parseSigned = (v) => {
+  const n = parseFloat(String(v).replace(',', '.').replace('−', '-'));
+  return Number.isFinite(n) ? n : null;
+};
 
 const parseNum = (v) => {
   const n = parseFloat(String(v).replace(',', '.'));
@@ -1145,7 +1219,11 @@ const A = {
     const mine = S.exercises.find((x) => x.dbId === d.id);
     if (mine) return openExercise(mine.id);
     const e = (await loadExerciseDb()).find((x) => x.id === d.id);
-    createExercise({ name: e.name, dbId: e.id, muscleGroup: e.muscle, defaultUnit: unitForEquipment(e.equipment) });
+    const body = e.equipment === 'body only';
+    createExercise({
+      name: e.name, dbId: e.id, muscleGroup: e.muscle, defaultUnit: body ? 'kg' : unitForEquipment(e.equipment),
+      ...(body ? { kind: 'bodyweight', bodyShare: defaultBodyShare(e.name) } : {}),
+    });
   },
   'own-ex': () => {
     sheet.dataset.muscle = '';
@@ -1153,6 +1231,7 @@ const A = {
     openSheet(`<h3>Eigene Übung</h3>
       <label class="field"><span>Name</span><input id="fText" value="${h(view.q)}" autocomplete="off"></label>
       <div class="field"><span>Einheit</span>${unitButtons('kg')}</div>
+      <label class="check"><input type="checkbox" id="fBody"><span>Körpergewichtsübung (Klimmzug, Dip, Liegestütz)</span></label>
       <div class="field"><span>Muskelgruppe</span>${muscleButtons('')}</div>
       <div class="btns"><button data-a="close">Abbrechen</button><button class="primary" data-a="save-own-ex">Anlegen</button></div>`);
   },
@@ -1168,8 +1247,12 @@ const A = {
     const name = $('#fText').value.trim();
     if (!name) return;
     if (!sheet.dataset.muscle) { toast('Bitte Muskelgruppe wählen'); return; }
+    const body = $('#fBody').checked;
     closeSheet();
-    createExercise({ name, muscleGroup: sheet.dataset.muscle, defaultUnit: sheet.dataset.unit || null });
+    createExercise({
+      name, muscleGroup: sheet.dataset.muscle, defaultUnit: body ? 'kg' : sheet.dataset.unit || null,
+      ...(body ? { kind: 'bodyweight', bodyShare: defaultBodyShare(name) } : {}),
+    });
   },
   'edit-ex': () => {
     const ex = exById(log.exerciseId);
@@ -1178,6 +1261,12 @@ const A = {
     openSheet(`<h3>Übung bearbeiten</h3>
       <label class="field"><span>Name</span><input id="fText" value="${h(ex.name)}" autocomplete="off"></label>
       <div class="field"><span>Muskelgruppe</span>${muscleButtons(ex.muscleGroup)}</div>
+      <label class="field"><span>Zweite Muskelgruppe (zählt halb in Region und Balance)</span>
+        <select id="fSecond"><option value="">keine</option>${Object.entries(MUSCLES).map(([k, l]) =>
+    `<option value="${k}" ${secondaryOf(ex) === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="check"><input type="checkbox" id="fBody" ${isBodyweight(ex) ? 'checked' : ''}><span>Körpergewichtsübung (Gewicht = Körpergewicht + Zusatz)</span></label>
+      <label class="field"><span>Anteil des Körpergewichts (Klimmzug 1, Dip 0,95, Liegestütz 0,65)</span>
+        <input id="fShare" inputmode="decimal" value="${fmtNum(ex.bodyShare || defaultBodyShare(ex.name))}"></label>
       <div class="btns">${used ? '' : '<button class="danger" data-a="del-ex">Löschen</button>'}
         <button data-a="close">Abbrechen</button><button class="primary" data-a="save-ex">Speichern</button></div>`);
   },
@@ -1187,9 +1276,18 @@ const A = {
     if (!name) return;
     ex.name = name;
     ex.muscleGroup = sheet.dataset.muscle || ex.muscleGroup;
+    ex.muscleGroup2 = $('#fSecond').value || null;
+    const wasBody = isBodyweight(ex);
+    if ($('#fBody').checked) {
+      ex.kind = 'bodyweight';
+      ex.bodyShare = parseNum($('#fShare').value) || 1;
+      ex.defaultUnit = 'kg';
+    } else if (wasBody) {
+      delete ex.kind;
+    }
     await db.put('exercises', ex);
     closeSheet();
-    render();
+    if (wasBody !== isBodyweight(ex)) openExercise(ex.id); else render();
   },
   'del-ex': async () => {
     if (!confirm('Übung löschen?')) return;
@@ -1213,21 +1311,36 @@ const A = {
     closeSheet();
     addSet(Math.round(n));
   },
-  step: (d) => { log.weight = stepWeight(log.weight, log.unit, Number(d.d), stepInfo().step); render(); },
+  step: (d) => {
+    const min = isBodyweight(exById(log.exerciseId)) ? -Infinity : 0;
+    log.weight = stepWeight(log.weight, log.unit, Number(d.d), stepInfo().step, min);
+    render();
+  },
   'type-weight': () => {
     const info = stepInfo();
     const auto = info.history ? 'aus Verlauf: ' + fmtNum(info.history) : 'Standard: ' + fmtNum(stepSize(log.unit, settings()));
-    openSheet(`<h3>Gewicht (${log.unit === 'stufe' ? 'Stufe' : 'kg'})</h3>
-      <label class="field"><input id="fWeight" inputmode="decimal" value="${log.weight == null ? '' : fmtNum(log.weight)}"></label>
+    const ex = exById(log.exerciseId);
+    const bw = isBodyweight(ex);
+    // Erweiterte Einstellung: 1 kg ist überall 1 kg (Kurzhantel, Langhantel). Gilt für die ganze Übung.
+    const same = !bw && log.unit === 'kg' ? `<label class="check"><input type="checkbox" id="fSame" ${ex.sameEverywhere ? 'checked' : ''}>
+        <span>Gewicht überall gleich (z. B. Kurzhantel): 1 kg zählt in jedem Gym gleich, Vergleich über alle Gyms</span></label>` : '';
+    openSheet(`<h3>${bw ? 'Zusatz in kg (negativ = Unterstützung)' : 'Gewicht (' + (log.unit === 'stufe' ? 'Stufe' : 'kg') + ')'}</h3>
+      <label class="field"><input id="fWeight" inputmode="${bw ? 'text' : 'decimal'}" value="${log.weight == null ? '' : fmtNum(log.weight)}"></label>
       <label class="field"><span>Schritt für +/- bei dieser Übung in diesem Gym (leer = automatisch, ${h(auto)})</span>
         <input id="fStep" inputmode="decimal" value="${info.override ? fmtNum(info.override) : ''}" placeholder="${h(fmtNum(info.history || stepSize(log.unit, settings())))}"></label>
+      ${same}
       <div class="btns"><button data-a="close">Abbrechen</button><button class="primary" data-a="save-weight">Übernehmen</button></div>`);
     setTimeout(() => $('#fWeight').select(), 50);
   },
   'save-weight': async () => {
-    log.weight = parseNum($('#fWeight').value);
+    const ex = exById(log.exerciseId);
+    log.weight = (isBodyweight(ex) ? parseSigned : parseNum)($('#fWeight').value);
     const step = parseNum($('#fStep').value);
     await setMeta(stepKey(), step || null);
+    if ($('#fSame') && $('#fSame').checked !== !!ex.sameEverywhere) {
+      ex.sameEverywhere = $('#fSame').checked;
+      await db.put('exercises', ex);
+    }
     closeSheet();
     render();
   },
@@ -1235,7 +1348,8 @@ const A = {
     const unit = d.u || null;
     const gym = currentGym();
     await setMeta('unitPref:' + log.exerciseId + '|' + gym.id, unit);
-    log = { exerciseId: log.exerciseId, ...prefill(exById(log.exerciseId), gym.id, S.sessions, S.sets, unit) };
+    const ex = exById(log.exerciseId);
+    log = { exerciseId: log.exerciseId, ...prefill(ex, gymScope(ex), S.sessions, S.sets, unit) };
     render();
   },
   undo: async () => {
@@ -1251,13 +1365,46 @@ const A = {
   },
 
   'edit-set': (d) => editSetSheet(S.sets.find((s) => s.id === d.id)),
+  'sheet-rir': (d, el) => {
+    sheet.dataset.rir = d.v;
+    document.querySelectorAll('#rirSeg button').forEach((b) => b.classList.toggle('on', b === el));
+  },
+  'quick-rir': async (d) => {
+    const set = S.sets.find((s) => s.id === d.id);
+    set.rir = set.rir === Number(d.v) ? null : Number(d.v);
+    await db.put('sets', set);
+    render();
+  },
+  'add-bw': () => {
+    const cur = bodyWeightAt(bodyWeights(), todayISO());
+    openSheet(`<h3>Körpergewicht heute (kg)</h3>
+      <label class="field"><input id="fBw" inputmode="decimal" value="${cur ? fmtNum(cur) : ''}"></label>
+      <div class="btns"><button data-a="close">Abbrechen</button><button class="primary" data-a="save-bw">Speichern</button></div>`);
+    setTimeout(() => $('#fBw').select(), 50);
+  },
+  'save-bw': async () => {
+    const kg = parseNum($('#fBw').value);
+    if (!kg) { toast('Ungültiger Wert'); return; }
+    const today = todayISO();
+    await setMeta('bodyWeights', bodyWeights().filter((e) => e.date !== today).concat({ date: today, kg }));
+    closeSheet();
+    render();
+  },
+  'del-bw': async (d) => {
+    if (!confirm('Eintrag löschen?')) return;
+    await setMeta('bodyWeights', bodyWeights().filter((e) => e.date !== d.date));
+    render();
+  },
+  'ex-metric': (d) => { chartState.exMetric = d.v; render(); },
   'save-set': async (d) => {
     const set = S.sets.find((s) => s.id === d.id);
     const reps = parseNum($('#fReps').value);
     if (reps == null) { toast('Reps fehlen'); return; }
     const unit = sheet.dataset.unit || null;
-    const weight = unit ? parseNum($('#fWeight').value) : null;
-    Object.assign(set, { reps: Math.round(reps), weight, unit: weight == null ? null : unit });
+    const parse = isBodyweight(exById(set.exerciseId)) ? parseSigned : parseNum;
+    const weight = unit ? parse($('#fWeight').value) : null;
+    const rir = sheet.dataset.rir === '' || sheet.dataset.rir === undefined ? null : Number(sheet.dataset.rir);
+    Object.assign(set, { reps: Math.round(reps), weight, unit: weight == null ? null : unit, rir });
     await db.put('sets', set);
     closeSheet();
     render();

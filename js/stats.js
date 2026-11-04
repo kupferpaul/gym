@@ -53,6 +53,13 @@ export function bodyWeightAt(entries, date) {
   return (before.length ? before[before.length - 1] : sorted[0]).kg;
 }
 
+// V13: Anteil des Körpergewichts, der bewegt wird (Klimmzug 1,0, Dip 0,95, Liegestütz 0,65).
+export function defaultBodyShare(name) {
+  if (/dip/i.test(name || '')) return 0.95;
+  if (/push.?up|liegest/i.test(name || '')) return 0.65;
+  return 1;
+}
+
 // Kurzhantel, Körpergewicht: 1 kg ist in jedem Gym 1 kg, also Faktor 1 und Vergleich über Gyms hinweg.
 export const isBodyweight = (exercise) => !!exercise && exercise.kind === 'bodyweight';
 export const isUniversal = (exercise) => !!exercise && (exercise.sameEverywhere === true || isBodyweight(exercise));
@@ -259,7 +266,7 @@ export function regionSeries(seriesList, exercises) {
 
 // V17: Balance = Arbeitssätze pro Region in den letzten 28 Tagen, sekundäre Muskelgruppe zählt 0,5 Satz.
 // Keine Schätzung, kein Faktor: beantwortet "trainiere ich ausgewogen?".
-export function regionBalance(sessions, sets, exercises, todayIso, days = 28) {
+export function regionBalance(sessions, sets, exercises, todayIso, days = 28, bodyWeights = []) {
   const out = {};
   Object.keys(REGIONS).forEach((r) => { out[r] = 0; });
   const exById = new Map(exercises.map((e) => [e.id, e]));
@@ -269,7 +276,7 @@ export function regionBalance(sessions, sets, exercises, todayIso, days = 28) {
     [...new Set(own.map((x) => x.exerciseId))].forEach((id) => {
       const ex = exById.get(id);
       if (!ex) return;
-      const n = workingSets(own.filter((x) => x.exerciseId === id)).length;
+      const n = workingSets(effectiveSets(ex, own.filter((x) => x.exerciseId === id), sessions, bodyWeights)).length;
       const first = regionOf(ex.muscleGroup);
       const second = regionOf(secondaryOf(ex));
       if (first) out[first] += n;

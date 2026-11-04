@@ -239,6 +239,17 @@ dialog h3 { margin: 4px 0 16px; font-size: 20px; }
 button.more { width: 100%; margin-top: 16px; color: var(--muted); }
 .chart .goal { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 6 4; }
 
+/* Review P2: Schalter, Reserve, Balance */
+.check { display: flex; align-items: center; gap: 12px; min-height: var(--tap); margin-bottom: 16px; font-size: 15px; }
+.check input { width: 24px; height: 24px; flex: 0 0 24px; accent-color: var(--text); }
+.seg.rir { align-items: center; margin-bottom: 8px; }
+.seg.rir .small { padding: 0 8px; }
+.balance .bal { margin-bottom: 12px; }
+.bal-top { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.bal-track { position: relative; height: 12px; border-radius: 999px; background: var(--bg); overflow: hidden; }
+.bal-band { position: absolute; top: 0; bottom: 0; background: var(--muted); opacity: 0.35; }
+.bal-bar { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; }
+
 /* Status zuletzt, damit es Grundfarben (z. B. Geisterwert in Stein) überschreibt:
    besser ▲ Messing, gleich ▬ Stein, schlechter ▼ Rost – nie nur Farbe, immer mit Pfeil. */
 .r1 { color: var(--accent); }

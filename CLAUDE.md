@@ -54,7 +54,10 @@ IndexedDB über `js/db.js`, Offline über `sw.js`. Deploy: GitHub Pages (`kupfer
 - Kurve Weg 2 (Expert Review P1, Datei private/expert-review-fortschrittsberechnung.md): Basis = Median der ersten
   3 Trainings (oder der ersten 21 Tage), Faktor = Median-Verhältnis aus bis zu 3 Trainings je Seite (vorläufig bis 3),
   Bezugsgerät pro Übung in meta `refMachines` gespeichert, Region mit Eintritt/56-Tage-Verfall, Trend Theil-Sen ±3 %.
-  Etappe 2 (P2) und 3 (P3) des Reviews erst nach iPhone-Test.
+- Review P2: `exercise.sameEverywhere` (Schalter im Gewicht-Fenster) und `kind: 'bodyweight'` vergleichen über alle Gyms
+  (Faktor 1, `gymId null`); Körpergewicht in meta `bodyWeights`, wirksame Last über `effectiveSets`; RIR optional pro Satz
+  (`set.rir`); Region gewichtet mit Sekundärmuskel (`muscleGroup2`, ×0,5); Balance und Volumen nur aus Arbeitssätzen.
+  Etappe 3 (P3) des Reviews erst nach iPhone-Test.
 - Satz eintragen ohne Tastatur in < 5 s; Touch-Ziele ≥ 56px, wichtige Tasten unten.
 - Relative Pfade (App läuft unter /gym/). Oberfläche auf Deutsch, Dark Mode.
 - Repo ist öffentlich: keine Schlüssel, keine persönlichen Daten (Seed erst nach Rückfrage committen).
