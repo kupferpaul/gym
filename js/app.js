@@ -431,7 +431,7 @@ const VIEWS = {
 
     return `<header class="bar">
         <button class="back ghost" data-a="home" aria-label="Zurück">‹</button>
-        <div class="titles" data-a="edit-ex"><h1>${h(ex.name)}</h1><div class="date">${h(currentGym().name)}</div></div></header>
+        <div class="titles" data-a="edit-ex"><h1>${h(ex.name)}</h1><div class="date">${h(currentGym().name)} · Übung bearbeiten ›</div></div></header>
       <div class="list sets">${list.length ? list.map((s) => `
         <button class="row ${s.id === flashId ? 'flash' : ''}" data-a="edit-set" data-id="${s.id}">
           <span class="num">Satz ${s.order}</span><span class="main title">${h(setLabel(ex, s))}</span>
@@ -1260,13 +1260,13 @@ const A = {
     sheet.dataset.muscle = ex.muscleGroup || '';
     openSheet(`<h3>Übung bearbeiten</h3>
       <label class="field"><span>Name</span><input id="fText" value="${h(ex.name)}" autocomplete="off"></label>
+      <label class="check"><input type="checkbox" id="fBody" ${isBodyweight(ex) ? 'checked' : ''}><span>Körpergewichtsübung (Gewicht = Körpergewicht + Zusatz)</span></label>
+      <label class="field"><span>Anteil des Körpergewichts (Klimmzug 1, Dip 0,95, Liegestütz 0,65)</span>
+        <input id="fShare" inputmode="decimal" value="${fmtNum(ex.bodyShare || defaultBodyShare(ex.name))}"></label>
       <div class="field"><span>Muskelgruppe</span>${muscleButtons(ex.muscleGroup)}</div>
       <label class="field"><span>Zweite Muskelgruppe (zählt halb in Region und Balance)</span>
         <select id="fSecond"><option value="">keine</option>${Object.entries(MUSCLES).map(([k, l]) =>
     `<option value="${k}" ${secondaryOf(ex) === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label class="check"><input type="checkbox" id="fBody" ${isBodyweight(ex) ? 'checked' : ''}><span>Körpergewichtsübung (Gewicht = Körpergewicht + Zusatz)</span></label>
-      <label class="field"><span>Anteil des Körpergewichts (Klimmzug 1, Dip 0,95, Liegestütz 0,65)</span>
-        <input id="fShare" inputmode="decimal" value="${fmtNum(ex.bodyShare || defaultBodyShare(ex.name))}"></label>
       <div class="btns">${used ? '' : '<button class="danger" data-a="del-ex">Löschen</button>'}
         <button data-a="close">Abbrechen</button><button class="primary" data-a="save-ex">Speichern</button></div>`);
   },
