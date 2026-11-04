@@ -9,6 +9,7 @@ import {
 } from '../js/run.js';
 import {
   epley, median, regionOf, exerciseSeries, regionSeries, recentTrend, suggestStartWeight,
+  bodyWeightAt, effectiveSets, isUniversal, secondaryOf, regionBalance,
 } from '../js/stats.js';
 import {
   sortExercises, suggestNext, exerciseSequence, lastSet, prefill, stepWeight, historyStep, resolveStep,
@@ -489,7 +490,7 @@ test('Sprüche: fest pro Training, aus der Liste', () => {
     assert.strictEqual(last.date, '2026-10-30');
     assert.strictEqual(last.pct, 17);
     assert.deepStrictEqual(last.excluded.map((e) => e.exerciseId + ':' + e.why).sort(), ['cable:neu', 'fly:pause']);
-    assert.strictEqual(r.Brust.find((p) => p.date === '2026-08-31').pct, 6); // (5 + 7) / 2
+    assert.strictEqual(r.Brust.find((p) => p.date === '2026-08-31').pct, 6.2); // V14: (5 × 2 + 7 × 3) / 5 Trainings in 56 Tagen
   });
 
   test('Region: Index-Punkt im Reise-Gym wirft die Übung nicht raus', () => {
@@ -503,6 +504,101 @@ test('Sprüche: fest pro Training, aus der Liste', () => {
     const pt = (date, pct) => ({ date, pct, value: 100, sessionId: date, index: true });
     const row = { exerciseId: 'row', baseReady: true, establishedDate: '2026-09-01', points: [pt('2026-09-01', 0), pt('2026-09-10', 22)] };
     assert.deepStrictEqual(regionSeries([row], [{ id: 'row', muscleGroup: 'middle back' }]), {});
+  });
+
+  test('Review T9 (V11): RIR zählt als mögliche Wiederholungen', () => {
+    const one = (extra) => exerciseSeries(X, 'home', [sess('a1', '2026-09-01', 'home')], [{ ...set('a1', 'x', 1, 100, 'kg', 10), ...extra }]).points[0].raw;
+    close(one({}), 133.3333, 1e-3);
+    close(one({ rir: 2 }), 140);
+    close(one({ rir: 0 }), 133.3333, 1e-3);
+  });
+
+  test('V11: Weg 1 nutzt RIR nur, wenn sie bei allen Arbeitssätzen beider Trainings vorliegt', () => {
+    const w = (reps, rir) => ({ weight: 100, unit: 'kg', reps, rir });
+    assert.strictEqual(compareSets([w(10, 2), w(10, 2)], [w(10, 0), w(10, 1)]).repsDiff, -3);
+    assert.strictEqual(compareSets([w(10, 2), w(10, undefined)], [w(10, 0), w(10, 1)]).repsDiff, 0);
+  });
+
+  test('Schalter "Gewicht überall gleich": Faktor 1 statt Schätzung, nur zwischen kg-Geräten', () => {
+    const ss = [sess('a1', '2026-09-01', 'home'), sess('a2', '2026-09-08', 'home'), sess('b1', '2026-09-15', 'trip')];
+    const st = [set('a1', 'x', 1, 20, 'kg', 10), set('a2', 'x', 1, 22.5, 'kg', 10), set('b1', 'x', 1, 25, 'kg', 10)];
+    const off = exerciseSeries(X, 'home', ss, st);
+    assert.strictEqual(off.factors.get('trip|kg').source, 'vorläufig');
+    const on = exerciseSeries({ ...X, sameEverywhere: true }, 'home', ss, st);
+    assert.deepStrictEqual(on.factors.get('trip|kg'), { factor: 1, source: 'gleich' });
+    assert.strictEqual(on.points[2].estimated, false);
+    close(on.points[2].value, epley(25, 10));
+    // Maschine in Stufen bleibt eigenes Gerät mit Schätzung
+    const mixed = exerciseSeries({ ...X, sameEverywhere: true }, 'home', ss, [set('a1', 'x', 1, 20, 'kg', 10), set('b1', 'x', 1, 7, 'stufe', 10)]);
+    assert.notStrictEqual(mixed.factors.get('trip|stufe').source, 'gleich');
+    assert.strictEqual(isUniversal({ kind: 'bodyweight' }), true);
+    assert.strictEqual(isUniversal({ kind: 'run' }), false);
+  });
+
+  test('Vergleich über alle Gyms: gymId null', () => {
+    const ss = [sess('a1', '2026-09-01', 'home'), sess('b1', '2026-09-08', 'trip'), sess('a2', '2026-09-15', 'home')];
+    const st = [set('a1', 'x', 1, 20, 'kg', 10), set('b1', 'x', 1, 25, 'kg', 8)];
+    assert.strictEqual(previousSets('x', 'home', ss, st, 'a2').session.id, 'a1');
+    assert.strictEqual(previousSets('x', null, ss, st, 'a2').session.id, 'b1');
+    assert.strictEqual(prefill({ id: 'x', defaultUnit: 'kg' }, null, ss, st).weight, 25);
+  });
+
+  test('Review V13: Körpergewicht mit Datum, Anteil und Zusatz', () => {
+    const bw = [{ date: '2026-09-01', kg: 80 }, { date: '2026-10-01', kg: 82 }];
+    assert.strictEqual(bodyWeightAt(bw, '2026-09-15'), 80);
+    assert.strictEqual(bodyWeightAt(bw, '2026-10-01'), 82);
+    assert.strictEqual(bodyWeightAt(bw, '2026-08-01'), 80); // vor dem ersten Eintrag: erster Eintrag
+    assert.strictEqual(bodyWeightAt([], '2026-09-15'), null);
+    const dip = { id: 'd', kind: 'bodyweight', bodyShare: 0.95 };
+    const ss = [sess('a1', '2026-09-01', 'home'), sess('b1', '2026-09-08', 'trip')];
+    const st = [set('a1', 'd', 1, null, null, 10), set('b1', 'd', 1, 10, 'kg', 8), set('b1', 'd', 2, -20, 'kg', 12)];
+    const eff = effectiveSets(dip, st, ss, bw);
+    assert.deepStrictEqual(eff.map((x) => [x.weight, x.addKg]), [[76, 0], [86, 10], [56, -20]]);
+    const s = exerciseSeries(dip, 'home', ss, st, [], { bodyWeights: bw });
+    close(s.points[0].raw, 76 * (1 + 10 / 30));
+    close(s.points[1].raw, 86 * (1 + 8 / 30));
+    assert.deepStrictEqual(s.factors.get('trip|kg'), { factor: 1, source: 'gleich' }); // überall gleich
+    const none = exerciseSeries(dip, 'home', ss, st);
+    assert.deepStrictEqual([none.points.length, none.needsBodyWeight], [0, true]);
+    // Weg 1: mehr Zusatz ist mehr Last
+    const c = compareSets(effectiveSets(dip, [st[0]], ss, bw), effectiveSets(dip, [{ ...st[1], reps: 10 }], ss, bw));
+    assert.strictEqual(c.result, 1);
+  });
+
+  test('Review V14–V16: Region gewichtet, Hohlpunkt-Regel, sekundäre Muskelgruppe', () => {
+    const pt = (date, pct, estimated = false) => ({ date, pct, value: 100, sessionId: date, estimated });
+    const a = { exerciseId: 'a', baseReady: true, establishedDate: '2026-09-01', points: [pt('2026-09-01', 0), pt('2026-09-05', 10), pt('2026-09-09', 20)] };
+    const b = { exerciseId: 'b', baseReady: true, establishedDate: '2026-09-09', points: [pt('2026-09-09', 40, true)] };
+    const r = regionSeries([a, b], [{ id: 'a', muscleGroup: 'chest', name: 'A' }, { id: 'b', muscleGroup: 'chest', name: 'B' }]);
+    const last = r.Brust.slice(-1)[0];
+    close(last.pct, (20 * 3 + 40 * 1) / 4); // V14: a hat 3, b hat 1 Training
+    assert.strictEqual(last.estimated, false); // V15: 1/4 geschätzt ist nicht > 1/3
+    const b2 = { ...b, points: [pt('2026-09-01', 0, true), pt('2026-09-09', 40, true)] };
+    assert.strictEqual(regionSeries([a, b2], [{ id: 'a', muscleGroup: 'chest', name: 'A' }, { id: 'b', muscleGroup: 'chest', name: 'B' }]).Brust.slice(-1)[0].estimated, true);
+    // V16: Chest press zählt in Arme mit halbem Gewicht
+    const c = { exerciseId: 'c', baseReady: true, establishedDate: '2026-09-09', points: [pt('2026-09-09', 10)] };
+    const sec = regionSeries([a, c], [{ id: 'a', muscleGroup: 'chest', name: 'Chest press' }, { id: 'c', muscleGroup: 'biceps', name: 'Curl', muscleGroup2: null }]);
+    close(sec.Arme.slice(-1)[0].pct, (10 * 1 + 20 * 1.5) / 2.5);
+    assert.strictEqual(secondaryOf({ name: 'Chest press' }), 'triceps');
+    assert.strictEqual(secondaryOf({ name: 'Klimmzug' }), 'biceps');
+    assert.strictEqual(secondaryOf({ name: 'Chest press', muscleGroup2: null }), null);
+    assert.strictEqual(secondaryOf({ name: 'Fly' }), null);
+  });
+
+  test('Review V17: Balance zählt Arbeitssätze pro Region, sekundär halb', () => {
+    const ss = [sess('a1', '2026-10-10', 'home'), sess('a2', '2026-09-01', 'home')];
+    const st = [set('a1', 'p', 1, 50, 'kg', 10), set('a1', 'p', 2, 100, 'kg', 10), set('a1', 'p', 3, 100, 'kg', 10), set('a2', 'p', 1, 100, 'kg', 10)];
+    const b = regionBalance(ss, st, [{ id: 'p', name: 'Chest press', muscleGroup: 'chest' }], '2026-10-20');
+    assert.strictEqual(b.Brust, 2); // Herantast-Satz und alter Termin zählen nicht
+    assert.strictEqual(b.Arme, 1);
+    assert.strictEqual(b.Beine, 0);
+  });
+
+  test('Review V18: Volumen über Arbeitssätze, umgerechnet', () => {
+    const ss = [sess('a1', '2026-09-01', 'home')];
+    const st = [set('a1', 'x', 1, 50, 'kg', 10), set('a1', 'x', 2, 100, 'kg', 10), set('a1', 'x', 3, 100, 'kg', 8)];
+    const s = exerciseSeries(X, 'home', ss, st);
+    assert.strictEqual(s.points[0].volumeValue, 1800);
   });
 
   test('Review T8 (V9): Startgewicht über Ziel-Reps, auf Schrittweite gerundet', () => {

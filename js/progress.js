@@ -9,7 +9,8 @@ const sign = (n) => (n > 0 ? 1 : n < 0 ? -1 : 0);
 
 // Sätze der Übung im letzten Training dieser Übung in diesem Gym vor excludeSessionId.
 export function previousSets(exerciseId, gymId, sessions, sets, excludeSessionId) {
-  const ordered = sortSessions(sessions.filter((s) => s.gymId === gymId && s.id !== excludeSessionId));
+  // gymId null = über alle Gyms (Übung mit "Gewicht überall gleich" oder Körpergewicht).
+  const ordered = sortSessions(sessions.filter((s) => (gymId == null || s.gymId === gymId) && s.id !== excludeSessionId));
   for (let i = ordered.length - 1; i >= 0; i--) {
     const list = sets.filter((s) => s.sessionId === ordered[i].id && s.exerciseId === exerciseId);
     if (list.length) return { session: ordered[i], sets: list.sort(bySeq) };
@@ -25,6 +26,8 @@ function topWeight(list) {
 }
 
 const totalReps = (list) => list.reduce((n, s) => n + s.reps, 0);
+const totalRepsRir = (list) => list.reduce((n, s) => n + s.reps + s.rir, 0);
+const hasRir = (list) => list.length > 0 && list.every((s) => s.rir != null);
 
 // Arbeitssätze = Sätze mit mindestens 90 % des Höchstgewichts (Expert Review V8): Herantasten und
 // Aufwärmen zählen nicht, Backoff-Sätze knapp darunter schon. Ohne vergleichbares Gewicht: alle Sätze.
@@ -50,8 +53,11 @@ export function compareSets(prev, cur, lowerReps = DEFAULT_LOWER_REPS) {
   if (pw && cw && pw.unit === cw.unit) {
     const weightDiff = Math.round((cw.weight - pw.weight) * 100) / 100;
     const curWork = workingSets(cur);
-    const prevReps = totalReps(workingSets(prev));
-    const curReps = totalReps(curWork);
+    const prevWork = workingSets(prev);
+    // V11: Reserve (RIR) zählt mit, aber nur wenn sie bei allen Arbeitssätzen beider Trainings vorliegt.
+    const count = hasRir(curWork) && hasRir(prevWork) ? totalRepsRir : totalReps;
+    const prevReps = count(prevWork);
+    const curReps = count(curWork);
     const repsDiff = curReps - prevReps;
     if (weightDiff > 0) {
       const threshold = Math.max(0.6 * prevReps, curWork.length * lowerReps);
@@ -107,23 +113,26 @@ export function suggestIncrease(prev, currentWeight, currentUnit, threshold = DE
 }
 
 // Geisterwert-Text für Satz n (1-basiert), z. B. "S2 · 130 kg × 10"
-export function ghostText(prev, n) {
+export function ghostText(prev, n, fmt = formatWeight) {
   const s = prev && prev[n - 1];
   if (!s) return null;
-  return 'S' + n + ' · ' + (s.weight == null ? '' : formatWeight(s.weight, s.unit) + ' × ') + s.reps;
+  return 'S' + n + ' · ' + (s.weight == null ? '' : fmt(s.weight, s.unit, s) + ' × ') + s.reps;
 }
 
 // Zusammenfassung nach "Training abschließen": pro Übung Vergleich mit dem letzten Mal im selben Gym.
 // Dauer = erster bis letzter Satz (vergessenes Abschließen verfälscht sie so nicht).
-export function sessionSummary(session, sessions, sets, lowerReps = DEFAULT_LOWER_REPS) {
+// opts.anyGym(exerciseId) = Vergleich über alle Gyms; opts.effective(exerciseId, sets) = Sätze mit wirksamer Last.
+export function sessionSummary(session, sessions, sets, lowerReps = DEFAULT_LOWER_REPS, opts = {}) {
+  const eff = opts.effective || ((id, list) => list);
   const own = sets.filter((s) => s.sessionId === session.id).sort(bySeq);
   const order = [];
   own.forEach((s) => { if (!order.includes(s.exerciseId)) order.push(s.exerciseId); });
   const exercises = order.map((exerciseId) => {
     const list = own.filter((s) => s.exerciseId === exerciseId);
     const before = sessions.filter((x) => x.date < session.date || (x.date === session.date && (x.startedAt || 0) < (session.startedAt || 0)));
-    const prev = previousSets(exerciseId, session.gymId, before, sets, session.id);
-    return { exerciseId, sets: list, prev, cmp: prev ? compareSets(prev.sets, list, lowerReps) : null };
+    const gym = opts.anyGym && opts.anyGym(exerciseId) ? null : session.gymId;
+    const prev = previousSets(exerciseId, gym, before, sets, session.id);
+    return { exerciseId, sets: list, prev, cmp: prev ? compareSets(eff(exerciseId, prev.sets), eff(exerciseId, list), lowerReps) : null };
   });
   const times = own.map((s) => s.createdAt).filter(Boolean);
   const minutes = times.length > 1 ? Math.max(1, Math.round((Math.max(...times) - Math.min(...times)) / 60000)) : null;

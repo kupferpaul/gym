@@ -122,7 +122,8 @@ export function suggestNext(sets, lastId, doneIds = []) {
 
 // Letzter Satz dieser Übung in diesem Gym (über alle Sessions).
 export function lastSet(exerciseId, gymId, sessions, sets) {
-  const ordered = sortSessions(sessions.filter((s) => s.gymId === gymId));
+  // gymId null = über alle Gyms (Übung mit "Gewicht überall gleich" oder Körpergewicht).
+  const ordered = sortSessions(sessions.filter((s) => gymId == null || s.gymId === gymId));
   const bySession = setsBySession(sets.filter((s) => s.exerciseId === exerciseId));
   for (let i = ordered.length - 1; i >= 0; i--) {
     const list = bySession.get(ordered[i].id);
@@ -159,7 +160,7 @@ function roundStep(d, unit) {
 
 export function historyStep(exerciseId, gymId, unit, sessions, sets) {
   if (!unit) return null;
-  const tops = sortSessions(sessions.filter((s) => s.gymId === gymId)).map((session) => {
+  const tops = sortSessions(sessions.filter((s) => gymId == null || s.gymId === gymId)).map((session) => {
     const w = sets.filter((s) => s.sessionId === session.id && s.exerciseId === exerciseId && s.unit === unit && s.weight != null)
       .map((s) => s.weight);
     return w.length ? Math.max(...w) : null;
@@ -182,10 +183,11 @@ export function resolveStep(override, fromHistory, unit, settings = DEFAULT_SETT
 }
 
 // +/- Schritt, nie unter 0, ohne Rundungsfehler (2,5 + 2,5 + 2,5 = 7,5).
-export function stepWeight(weight, unit, dir, step) {
+// min = -Infinity bei Körpergewicht: negative Zusatzlast ist Unterstützung (Band, Maschine).
+export function stepWeight(weight, unit, dir, step, min = 0) {
   if (!unit) return null;
   const next = (weight || 0) + dir * step;
-  return Math.max(0, Math.round(next * 100) / 100);
+  return Math.max(min, Math.round(next * 100) / 100);
 }
 
 export function formatWeight(weight, unit) {

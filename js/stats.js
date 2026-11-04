@@ -9,6 +9,7 @@
 //    Median von bis zu 3 Trainings je Seite (V2; "vorläufig" bis 3 Trainings am neuen Gerät).
 // 4. Prozent ggü. einer Basis = Median der ersten 3 Trainings oder aller der ersten 21 Tage, was früher kommt (V3/F4).
 import { sortSessions } from './logic.js';
+import { workingSets } from './progress.js';
 
 // S17: Nacken gehört zum Rücken (Trapez), Rumpf = Bauch.
 export const REGIONS = {
@@ -28,6 +29,45 @@ export const BASE_DAYS = 21;        // … oder allen der ersten 21 Tage (F4)
 export const REGION_DECAY_DAYS = 56; // V5/F5: länger nicht trainiert → raus aus dem Regionsmittel
 export const ANCHOR_COUNT = 3;      // V2: bis zu 3 Trainings je Seite für den Faktor
 export const TREND_FLAT = 3;        // V6: ±3 % gilt als gleich
+export const SECONDARY_WEIGHT = 0.5; // V16: sekundäre Muskelgruppe zählt halb
+
+// V16: Standard-Sekundärmuskel aus dem Namen; exercise.muscleGroup2 (auch null = keiner) hat Vorrang.
+const SECONDARY_RULES = [
+  [/chest press|bench|bankdr|dip|push.?up|liegest/i, 'triceps'],
+  [/shoulder press|overhead press|military|schulterdr/i, 'triceps'],
+  [/row|ruder|pull.?up|chin.?up|pull.?down|klimm|latzug/i, 'biceps'],
+  [/squat|kniebeu|leg press|beinpresse/i, 'glutes'],
+  [/deadlift|kreuzheb/i, 'hamstrings'],
+];
+export function secondaryOf(exercise) {
+  if (exercise.muscleGroup2 !== undefined) return exercise.muscleGroup2;
+  const hit = SECONDARY_RULES.find(([re]) => re.test(exercise.name || ''));
+  return hit ? hit[1] : null;
+}
+
+// V13: Körpergewicht zum Datum = letzter Eintrag vor oder am Tag, sonst der erste Eintrag danach.
+export function bodyWeightAt(entries, date) {
+  if (!entries || !entries.length) return null;
+  const sorted = entries.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const before = sorted.filter((e) => e.date <= date);
+  return (before.length ? before[before.length - 1] : sorted[0]).kg;
+}
+
+// Kurzhantel, Körpergewicht: 1 kg ist in jedem Gym 1 kg, also Faktor 1 und Vergleich über Gyms hinweg.
+export const isBodyweight = (exercise) => !!exercise && exercise.kind === 'bodyweight';
+export const isUniversal = (exercise) => !!exercise && (exercise.sameEverywhere === true || isBodyweight(exercise));
+
+// V13: Sätze einer Körpergewichtsübung mit wirksamer Last = Anteil × Körpergewicht + Zusatz.
+// Der eingetragene Zusatz bleibt in addKg (für die Anzeige). Andere Übungen bleiben unverändert.
+export function effectiveSets(exercise, list, sessions, bodyWeights) {
+  if (!isBodyweight(exercise)) return list;
+  const share = exercise.bodyShare || 1;
+  const dateOf = new Map(sessions.map((s) => [s.id, s.date]));
+  return list.filter((s) => s.unit !== 'stufe').map((s) => {
+    const bw = bodyWeightAt(bodyWeights, dateOf.get(s.sessionId) || '') || 0;
+    return { ...s, weight: share * bw + (s.weight || 0), unit: 'kg', addKg: s.weight || 0 };
+  });
+}
 
 export function regionOf(muscle) {
   return Object.keys(REGIONS).find((r) => REGIONS[r].includes(muscle)) || null;
@@ -74,12 +114,16 @@ function sessionPoint(session, list, calOf, preferUnit) {
   const cal = calOf(machine);
   let best = null;
   weighted.filter((s) => s.unit === unit).forEach((s) => {
-    const raw = epley(load(s.weight, unit, cal).w, s.reps);
-    if (!best || raw > best.raw) best = { weight: s.weight, reps: s.reps, raw };
+    // V11: Reserve (RIR) zählt als mögliche Wiederholungen; ohne Angabe wie bisher.
+    const raw = epley(load(s.weight, unit, cal).w, s.reps + (s.rir || 0));
+    if (!best || raw > best.raw) best = { weight: s.weight, reps: s.reps, rir: s.rir == null ? null : s.rir, addKg: s.addKg, raw };
   });
+  // V18: Volumen = Σ Last × Reps über die Arbeitssätze.
+  const volume = workingSets(weighted.filter((s) => s.unit === unit))
+    .reduce((n, s) => n + load(s.weight, unit, cal).w * s.reps, 0);
   return {
     date: session.date, sessionId: session.id, gymId: session.gymId, unit, machine,
-    kgSpace: load(1, unit, cal).kg, ...best,
+    kgSpace: load(1, unit, cal).kg, volume, ...best,
   };
 }
 
@@ -87,7 +131,7 @@ function sessionPoint(session, list, calOf, preferUnit) {
 export function exerciseSeries(exercise, homeGymId, sessions, sets, calibrations = [], opts = {}) {
   const calOf = (m) => calibrations.find((c) => c.id === exercise.id + '|' + m);
   const ordered = sortSessions(sessions);
-  const exSets = sets.filter((s) => s.exerciseId === exercise.id);
+  const exSets = effectiveSets(exercise, sets.filter((s) => s.exerciseId === exercise.id), sessions, opts.bodyWeights);
   const [refGymHint, refUnitHint] = opts.refMachine ? opts.refMachine.split('|') : [];
   const points = [];
   ordered.forEach((session) => {
@@ -96,7 +140,10 @@ export function exerciseSeries(exercise, homeGymId, sessions, sets, calibrations
     if (p) points.push(p);
   });
   const empty = { exerciseId: exercise.id, ref: null, factors: new Map(), points: [], baseReady: false, base: null, establishedDate: null };
-  if (!points.length) return empty;
+  // V13: Ohne Körpergewicht gibt es keinen sinnvollen Wert für die Kurve.
+  if (!points.length || (isBodyweight(exercise) && !(opts.bodyWeights || []).length)) {
+    return { ...empty, needsBodyWeight: isBodyweight(exercise) && !!exSets.length };
+  }
 
   const count = new Map();
   points.forEach((p) => count.set(p.machine, (count.get(p.machine) || 0) + 1));
@@ -112,6 +159,8 @@ export function exerciseSeries(exercise, homeGymId, sessions, sets, calibrations
     const mine = points.filter((p) => p.machine === m);
     if (cal && cal.factorToHome) { factors.set(m, { factor: cal.factorToHome, source: 'manuell' }); return; }
     if (mine[0].kgSpace && refKg && (cal && cal.kgPerUnit)) { factors.set(m, { factor: 1, source: 'kg' }); return; }
+    // Schalter "Gewicht überall gleich" (auch Körpergewicht): kg ist kg, keine Schätzung.
+    if (isUniversal(exercise) && mine[0].unit === 'kg' && refPoints[0].unit === 'kg') { factors.set(m, { factor: 1, source: 'gleich' }); return; }
     // V2: Median der ersten bis zu 3 Trainings am neuen Gerät gegen den Median der letzten bis zu 3
     // Bezugs-Trainings davor (sonst die ersten bis zu 3 danach). Ab 3 Trainings eingefroren.
     const firstNew = mine.slice(0, ANCHOR_COUNT);
@@ -132,6 +181,7 @@ export function exerciseSeries(exercise, homeGymId, sessions, sets, calibrations
   points.forEach((p) => {
     const f = factors.get(p.machine);
     p.value = p.raw * f.factor;
+    p.volumeValue = p.volume * f.factor;
     p.index = isIndex(p);
     p.provisional = f.source === 'vorläufig';
     p.highReps = p.reps > HIGH_REPS;
@@ -156,13 +206,17 @@ export function exerciseSeries(exercise, homeGymId, sessions, sets, calibrations
   return { exerciseId: exercise.id, ref, factors, points, baseReady: !!base, base, establishedDate };
 }
 
-// Linie pro Körperregion (V5): an jedem Trainingstag der Region der Mittelwert der Übungen mit ihrem letzten Stand.
+// Linie pro Körperregion (V5, V14–V16): an jedem Trainingstag der Region der gewichtete Mittelwert der Übungen
+// mit ihrem letzten Stand. Gewicht = Trainings der letzten 56 Tage (mindestens 1), sekundäre Muskelgruppe × 0,5.
 // Eine Übung zählt erst, wenn ihre Basis steht, fällt nach 56 Tagen ohne Training heraus, Index-Stufen zählen nicht.
+// Punkt hohl, wenn mehr als 1/3 des Gewichts aus geschätzten Punkten stammt (auch mitgezogene, V15).
 export function regionSeries(seriesList, exercises) {
   const exById = new Map(exercises.map((e) => [e.id, e]));
   const out = {};
   Object.keys(REGIONS).forEach((region) => {
-    const members = seriesList.filter((s) => s.points.length && regionOf((exById.get(s.exerciseId) || {}).muscleGroup) === region);
+    const primary = (s) => regionOf((exById.get(s.exerciseId) || {}).muscleGroup) === region;
+    const secondary = (s) => !primary(s) && regionOf(secondaryOf(exById.get(s.exerciseId) || {})) === region;
+    const members = seriesList.filter((s) => s.points.length && (primary(s) || secondary(s)));
     if (!members.length) return;
     // Index-Stufen-Punkte zählen nicht (z. B. Reise-Gym mit Pin 7); eine Übung fällt nur ganz raus,
     // wenn sie ausschließlich Index-Stufen hat.
@@ -183,19 +237,44 @@ export function regionSeries(seriesList, exercises) {
         const last = usable(s).filter((p) => p.date <= day).pop();
         if (!ok || !last) { excluded.push({ exerciseId: s.exerciseId, why: s.baseReady && !usable(s).length ? 'index' : 'neu' }); return; }
         if (dayNum(day) - dayNum(last.date) > REGION_DECAY_DAYS) { excluded.push({ exerciseId: s.exerciseId, why: 'pause', days: dayNum(day) - dayNum(last.date) }); return; }
-        current.push(last);
+        const recent = s.points.filter((p) => p.date <= day && dayNum(day) - dayNum(p.date) <= REGION_DECAY_DAYS).length;
+        current.push({ pct: last.pct, estimated: last.estimated, weight: Math.max(1, recent) * (secondary(s) ? SECONDARY_WEIGHT : 1) });
       });
       if (!current.length) return;
+      const total = current.reduce((n, x) => n + x.weight, 0);
+      const unsure = current.filter((x) => x.estimated).reduce((n, x) => n + x.weight, 0);
       points.push({
         date: day,
-        pct: current.reduce((n, x) => n + x.pct, 0) / current.length,
-        estimated: today.some((x) => x.estimated),
+        pct: current.reduce((n, x) => n + x.pct * x.weight, 0) / total,
+        estimated: unsure / total > 1 / 3,
         sessionIds: [...new Set(today.map((x) => x.sessionId))],
         exercises: today.map((x) => x.exerciseId),
         excluded,
       });
     });
     if (points.length) out[region] = points;
+  });
+  return out;
+}
+
+// V17: Balance = Arbeitssätze pro Region in den letzten 28 Tagen, sekundäre Muskelgruppe zählt 0,5 Satz.
+// Keine Schätzung, kein Faktor: beantwortet "trainiere ich ausgewogen?".
+export function regionBalance(sessions, sets, exercises, todayIso, days = 28) {
+  const out = {};
+  Object.keys(REGIONS).forEach((r) => { out[r] = 0; });
+  const exById = new Map(exercises.map((e) => [e.id, e]));
+  const from = dayNum(todayIso) - days;
+  sessions.filter((s) => dayNum(s.date) > from && dayNum(s.date) <= dayNum(todayIso)).forEach((session) => {
+    const own = sets.filter((x) => x.sessionId === session.id);
+    [...new Set(own.map((x) => x.exerciseId))].forEach((id) => {
+      const ex = exById.get(id);
+      if (!ex) return;
+      const n = workingSets(own.filter((x) => x.exerciseId === id)).length;
+      const first = regionOf(ex.muscleGroup);
+      const second = regionOf(secondaryOf(ex));
+      if (first) out[first] += n;
+      if (second && second !== first) out[second] += n * SECONDARY_WEIGHT;
+    });
   });
   return out;
 }
